@@ -565,25 +565,39 @@ class PlanExecutor {
     if (!fieldMappings.length) return { success: false, error: 'No field mappings to validate' };
     
     try {
-      const validationResults = fieldMappings.map(mapping => 
-        this.validateAgainstSchema(mapping, targetSchema)
-      );
+      // Enhanced validation with domain-agnostic validators
+      const validationResults = fieldMappings.map(mapping => {
+        const schemaValidation = this.validateAgainstSchema(mapping, targetSchema);
+        const domainValidation = this.applyDomainAgnosticValidators(mapping);
+        
+        return {
+          ...schemaValidation,
+          domain_validation: domainValidation,
+          overall_valid: schemaValidation.valid && domainValidation.valid,
+          validation_issues: [...(schemaValidation.issues || []), ...(domainValidation.issues || [])]
+        };
+      });
       
       const repairedOutput = params.repair ? 
         this.repairInvalidMappings(fieldMappings, validationResults) : 
         fieldMappings;
       
-      console.log(`🔍 Validated ${fieldMappings.length} mappings, repaired: ${params.repair || false}`);
+      // Apply aggressive repair if requested
+      const finalOutput = params.aggressive_repair ? 
+        this.aggressiveRepairMappings(repairedOutput, validationResults) : 
+        repairedOutput;
+      
+      console.log(`🔍 Validated ${fieldMappings.length} mappings with domain validators, repaired: ${params.repair || false}`);
       
       return {
         success: true,
         outputs: {
           validation_results: validationResults,
-          repaired_output: repairedOutput,
-          field_mappings: repairedOutput // Update the mappings with repaired version
+          repaired_output: finalOutput,
+          field_mappings: finalOutput // Update the mappings with repaired version
         },
         cost: { tokens: 0, requests: 0 },
-        confidence: 0.8
+        confidence: 0.85
       };
     } catch (error) {
       return { success: false, error: error.message, cost: { tokens: 0, requests: 0 } };
@@ -1893,6 +1907,347 @@ class PlanExecutor {
     return Math.min(0.95, confidence);
   }
   
+  // =============================================================================
+  // DOMAIN-AGNOSTIC VALIDATORS - Quality checks with repair triggers
+  // =============================================================================
+  
+  /**
+   * Apply domain-agnostic validators to extracted mapping
+   */
+  applyDomainAgnosticValidators(mapping) {
+    const validations = {
+      name_validation: this.validateLooksLikeName(mapping.name),
+      title_validation: this.validateLooksLikeRole(mapping.title),
+      bio_validation: this.validateBioOk(mapping.bio)
+    };
+    
+    const issues = [];
+    let valid = true;
+    
+    Object.entries(validations).forEach(([field, validation]) => {
+      if (!validation.valid) {
+        valid = false;
+        issues.push(`${field}: ${validation.reason}`);
+      }
+    });
+    
+    return {
+      valid: valid,
+      issues: issues,
+      validations: validations,
+      repair_suggestions: this.generateRepairSuggestions(mapping, validations)
+    };
+  }
+  
+  /**
+   * Validator: looks_like_name
+   * ≥2 tokens, Title Case, no digits/punctuation
+   */
+  validateLooksLikeName(name) {
+    if (!name || typeof name !== 'string') {
+      return { valid: false, reason: 'name_missing', repairability: 'low' };
+    }
+    
+    const trimmed = name.trim();
+    if (trimmed.length === 0) {
+      return { valid: false, reason: 'name_empty', repairability: 'low' };
+    }
+    
+    const words = trimmed.split(/\s+/);
+    
+    // Must have at least 2 words
+    if (words.length < 2) {
+      return { valid: false, reason: 'name_too_few_words', repairability: 'medium' };
+    }
+    
+    // No more than 4 words (reasonable limit)
+    if (words.length > 4) {
+      return { valid: false, reason: 'name_too_many_words', repairability: 'high' };
+    }
+    
+    // Check each word for proper format
+    for (const word of words) {
+      // Must be proper title case
+      if (!/^[A-Z][a-z]+$/.test(word)) {
+        // Special handling for common prefixes/suffixes
+        if (!['Jr.', 'Sr.', 'II', 'III', 'IV', 'Ph.D.', 'M.D.'].includes(word)) {
+          return { valid: false, reason: 'name_improper_case', repairability: 'high' };
+        }
+      }
+      
+      // Word length check
+      if (word.length < 2 || word.length > 20) {
+        return { valid: false, reason: 'name_word_length', repairability: 'medium' };
+      }
+      
+      // No digits in names
+      if (/\d/.test(word)) {
+        return { valid: false, reason: 'name_contains_digits', repairability: 'low' };
+      }
+    }
+    
+    // Check for contamination patterns
+    const lowerName = trimmed.toLowerCase();
+    const contaminationWords = ['staff', 'team', 'members', 'directory', 'board', 'contact'];
+    
+    for (const contaminant of contaminationWords) {
+      if (lowerName.includes(contaminant)) {
+        return { valid: false, reason: 'name_contaminated', repairability: 'low' };
+      }
+    }
+    
+    return { valid: true, reason: 'valid_name', confidence: 0.9 };
+  }
+  
+  /**
+   * Validator: looks_like_role  
+   * Contains role words, <120 chars, not a sentence
+   */
+  validateLooksLikeRole(title) {
+    if (!title || typeof title !== 'string') {
+      return { valid: false, reason: 'title_missing', repairability: 'medium' };
+    }
+    
+    const trimmed = title.trim();
+    if (trimmed.length === 0) {
+      return { valid: false, reason: 'title_empty', repairability: 'medium' };
+    }
+    
+    // Length check - reasonable title length
+    if (trimmed.length > 120) {
+      return { valid: false, reason: 'title_too_long', repairability: 'high' };
+    }
+    
+    if (trimmed.length < 3) {
+      return { valid: false, reason: 'title_too_short', repairability: 'low' };
+    }
+    
+    // Check for contamination
+    const lowerTitle = trimmed.toLowerCase();
+    const contaminationWords = ['staff', 'team', 'members', 'directory', 'board of directors'];
+    
+    for (const contaminant of contaminationWords) {
+      if (lowerTitle.includes(contaminant)) {
+        return { valid: false, reason: 'title_contaminated', repairability: 'low' };
+      }
+    }
+    
+    // Check for sentence-like structure (bad for titles)
+    if (trimmed.match(/[.!?]\s+[A-Z]/)) {
+      return { valid: false, reason: 'title_is_sentence', repairability: 'high' };
+    }
+    
+    // Look for role-related words (positive indicator)
+    const roleWords = [
+      'director', 'manager', 'executive', 'assistant', 'coordinator',
+      'specialist', 'officer', 'head', 'lead', 'chief', 'president',
+      'vice', 'senior', 'junior', 'associate', 'development', 'marketing',
+      'sales', 'operations', 'finance', 'human resources', 'hr', 'it',
+      'engineer', 'developer', 'designer', 'analyst', 'consultant'
+    ];
+    
+    const hasRoleWord = roleWords.some(word => lowerTitle.includes(word));
+    
+    // Must contain at least one role word for high confidence
+    if (!hasRoleWord) {
+      // Still valid but lower confidence
+      return { 
+        valid: true, 
+        reason: 'title_no_role_words', 
+        confidence: 0.5,
+        suggestion: 'Consider verifying this title contains role information'
+      };
+    }
+    
+    return { valid: true, reason: 'valid_title', confidence: 0.85 };
+  }
+  
+  /**
+   * Validator: bio_ok
+   * ≥2 sentences OR ≥120 chars, doesn't end mid-token  
+   */
+  validateBioOk(bio) {
+    if (!bio || typeof bio !== 'string') {
+      return { valid: false, reason: 'bio_missing', repairability: 'medium' };
+    }
+    
+    const trimmed = bio.trim();
+    if (trimmed.length === 0) {
+      return { valid: false, reason: 'bio_empty', repairability: 'medium' };
+    }
+    
+    // Check for contamination at start
+    const lowerBio = trimmed.toLowerCase();
+    if (lowerBio.startsWith('staff') || lowerBio.startsWith('team') || 
+        lowerBio.startsWith('members') || lowerBio.startsWith('directory')) {
+      return { valid: false, reason: 'bio_contaminated_start', repairability: 'medium' };
+    }
+    
+    // Check minimum length
+    if (trimmed.length < 20) {
+      return { valid: false, reason: 'bio_too_short', repairability: 'low' };
+    }
+    
+    // Check maximum length (prevent pulling in too much)
+    if (trimmed.length > 2000) {
+      return { valid: false, reason: 'bio_too_long', repairability: 'high' };
+    }
+    
+    // Count sentences (simple heuristic)
+    const sentences = trimmed.split(/[.!?]+/).filter(s => s.trim().length > 10);
+    
+    // Must have at least 2 sentences OR be at least 120 characters
+    if (sentences.length < 2 && trimmed.length < 120) {
+      return { valid: false, reason: 'bio_insufficient_content', repairability: 'medium' };
+    }
+    
+    // Check if ends mid-token (incomplete)
+    const lastChar = trimmed[trimmed.length - 1];
+    if (/[a-z,]/.test(lastChar)) {
+      return { valid: false, reason: 'bio_incomplete_ending', repairability: 'high' };
+    }
+    
+    // Check for repetitive text (copy-paste errors)
+    const words = trimmed.toLowerCase().split(/\s+/);
+    const uniqueWords = new Set(words);
+    if (words.length > 20 && uniqueWords.size / words.length < 0.5) {
+      return { valid: false, reason: 'bio_repetitive', repairability: 'medium' };
+    }
+    
+    return { valid: true, reason: 'valid_bio', confidence: 0.8 };
+  }
+  
+  /**
+   * Generate repair suggestions based on validation failures
+   */
+  generateRepairSuggestions(mapping, validations) {
+    const suggestions = [];
+    
+    // Name repair suggestions
+    if (!validations.name_validation.valid) {
+      const nameReason = validations.name_validation.reason;
+      switch (nameReason) {
+        case 'name_too_many_words':
+          suggestions.push({ field: 'name', action: 'truncate_to_first_two_words' });
+          break;
+        case 'name_improper_case':
+          suggestions.push({ field: 'name', action: 'apply_title_case' });
+          break;
+        case 'name_contaminated':
+          suggestions.push({ field: 'name', action: 'remove_contamination_words' });
+          break;
+      }
+    }
+    
+    // Title repair suggestions
+    if (!validations.title_validation.valid) {
+      const titleReason = validations.title_validation.reason;
+      switch (titleReason) {
+        case 'title_too_long':
+          suggestions.push({ field: 'title', action: 'truncate_to_first_sentence' });
+          break;
+        case 'title_is_sentence':
+          suggestions.push({ field: 'title', action: 'extract_title_phrase' });
+          break;
+        case 'title_contaminated':
+          suggestions.push({ field: 'title', action: 'remove_contamination_words' });
+          break;
+      }
+    }
+    
+    // Bio repair suggestions
+    if (!validations.bio_validation.valid) {
+      const bioReason = validations.bio_validation.reason;
+      switch (bioReason) {
+        case 'bio_too_long':
+          suggestions.push({ field: 'bio', action: 'truncate_to_first_paragraph' });
+          break;
+        case 'bio_incomplete_ending':
+          suggestions.push({ field: 'bio', action: 'complete_last_sentence' });
+          break;
+        case 'bio_contaminated_start':
+          suggestions.push({ field: 'bio', action: 'remove_contamination_prefix' });
+          break;
+      }
+    }
+    
+    return suggestions;
+  }
+  
+  /**
+   * Apply aggressive repair attempts for low-quality mappings
+   */
+  aggressiveRepairMappings(mappings, validationResults) {
+    return mappings.map((mapping, index) => {
+      const validation = validationResults[index];
+      if (validation.overall_valid) return mapping;
+      
+      const repaired = { ...mapping };
+      
+      // Apply repair suggestions
+      validation.domain_validation.repair_suggestions.forEach(suggestion => {
+        repaired[suggestion.field] = this.applyRepairAction(
+          repaired[suggestion.field], 
+          suggestion.action
+        );
+      });
+      
+      return repaired;
+    });
+  }
+  
+  /**
+   * Apply specific repair action to a field value
+   */
+  applyRepairAction(value, action) {
+    if (!value) return value;
+    
+    switch (action) {
+      case 'truncate_to_first_two_words':
+        return value.split(/\s+/).slice(0, 2).join(' ');
+        
+      case 'apply_title_case':
+        return value.split(/\s+/).map(word => 
+          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        ).join(' ');
+        
+      case 'remove_contamination_words':
+        const contaminationWords = ['staff', 'team', 'members', 'directory', 'board'];
+        let cleaned = value;
+        contaminationWords.forEach(word => {
+          cleaned = cleaned.replace(new RegExp(word, 'gi'), '').trim();
+        });
+        return cleaned.replace(/\s+/g, ' ');
+        
+      case 'truncate_to_first_sentence':
+        const sentences = value.split(/[.!?]+/);
+        return sentences[0] + (sentences.length > 1 ? '.' : '');
+        
+      case 'extract_title_phrase':
+        // Extract the first meaningful phrase (before comma or period)
+        return value.split(/[,.]/)[0].trim();
+        
+      case 'truncate_to_first_paragraph':
+        const paragraphs = value.split('\n\n');
+        return paragraphs[0].trim();
+        
+      case 'complete_last_sentence':
+        return value.trim() + '.';
+        
+      case 'remove_contamination_prefix':
+        const prefixes = ['staff', 'team', 'members', 'directory'];
+        let cleanValue = value;
+        prefixes.forEach(prefix => {
+          const regex = new RegExp(`^${prefix}\\s*:?\\s*`, 'gi');
+          cleanValue = cleanValue.replace(regex, '');
+        });
+        return cleanValue.trim();
+        
+      default:
+        return value;
+    }
+  }
+  
   validateAgainstSchema(mapping, schema) {
     const validation = { valid: true, errors: [] };
     const fields = this.getSchemaFields(schema);
@@ -2834,6 +3189,1009 @@ class ActiveLearningQueue {
 }
 
 /**
+ * Generic Pattern Tests v0.1 - VMOTA-agnostic validation tests
+ * Tests universal patterns that should work across all staff/people pages
+ */
+class GenericPatternTests {
+  constructor() {
+    this.testResults = [];
+    this.passedTests = 0;
+    this.totalTests = 0;
+  }
+  
+  /**
+   * Run all generic pattern tests on extraction results
+   */
+  async runAllTests(extractionResult, semanticBlocks, originalHtml) {
+    console.log('🧪 Running generic pattern tests');
+    
+    this.testResults = [];
+    this.passedTests = 0;
+    this.totalTests = 0;
+    
+    // Test 1: Navigation Purge Test
+    await this.testNavigationPurge(semanticBlocks, extractionResult.data);
+    
+    // Test 2: Board vs Staff Test  
+    await this.testBoardVsStaffSeparation(semanticBlocks, extractionResult.data, originalHtml);
+    
+    // Test 3: Boundary Test
+    await this.testCleanBoundaries(extractionResult.data);
+    
+    // Test 4: Minimum Results Test
+    await this.testMinimumResults(semanticBlocks, extractionResult.data, extractionResult.budget_used);
+    
+    // Test 5: Data Quality Test
+    await this.testDataQuality(extractionResult.data);
+    
+    // Test 6: Confidence Calibration Test
+    await this.testConfidenceCalibration(extractionResult.data);
+    
+    // Test 7: VMOTA Success Criteria Test (if VMOTA URL detected)
+    await this.testVMOTASuccessCriteria(extractionResult.data, originalHtml);
+    
+    const passRate = this.totalTests > 0 ? this.passedTests / this.totalTests : 0;
+    
+    console.log(`🧪 Generic tests: ${this.passedTests}/${this.totalTests} passed (${(passRate * 100).toFixed(1)}%)`);
+    
+    return {
+      passed: this.passedTests,
+      total: this.totalTests,
+      pass_rate: passRate,
+      test_results: this.testResults,
+      overall_pass: passRate >= 0.8 // 80% pass rate required
+    };
+  }
+  
+  /**
+   * Test 1: Navigation Purge Test
+   * High link density + no role words ≠ profile_card
+   */
+  async testNavigationPurge(semanticBlocks, extractedData) {
+    const testName = 'Navigation Purge Test';
+    this.totalTests++;
+    
+    try {
+      // Find blocks that look like navigation (high link density)
+      const navBlocks = semanticBlocks.filter(block => 
+        (block.link_density || 0) > 0.15 && 
+        !(block.block_text || '').toLowerCase().match(/(director|manager|executive|assistant|coordinator|specialist)/i)
+      );
+      
+      // These blocks should NOT appear in final extracted data
+      let navContamination = 0;
+      for (const item of extractedData || []) {
+        const itemText = (item.name + ' ' + item.title + ' ' + item.bio).toLowerCase();
+        for (const navBlock of navBlocks) {
+          if (navBlock.block_text && itemText.includes(navBlock.block_text.toLowerCase().substring(0, 50))) {
+            navContamination++;
+            break;
+          }
+        }
+      }
+      
+      const passed = navContamination === 0;
+      if (passed) this.passedTests++;
+      
+      this.testResults.push({
+        test: testName,
+        passed: passed,
+        message: passed 
+          ? `✅ No navigation contamination (${navBlocks.length} nav blocks filtered)` 
+          : `❌ Found ${navContamination} items contaminated with navigation content`,
+        details: {
+          nav_blocks_detected: navBlocks.length,
+          contaminated_items: navContamination,
+          nav_block_samples: navBlocks.slice(0, 3).map(b => ({
+            selector: b.root_selector,
+            link_density: b.link_density,
+            text_preview: b.block_text?.substring(0, 100) + '...'
+          }))
+        }
+      });
+      
+    } catch (error) {
+      this.testResults.push({
+        test: testName,
+        passed: false,
+        message: `❌ Test failed: ${error.message}`,
+        details: { error: error.message }
+      });
+    }
+  }
+  
+  /**
+   * Test 2: Board vs Staff Test
+   * Many short names under "Board" → board_list not profile_card
+   */
+  async testBoardVsStaffSeparation(semanticBlocks, extractedData, originalHtml) {
+    const testName = 'Board vs Staff Separation Test';
+    this.totalTests++;
+    
+    try {
+      // Look for board/directors sections in HTML
+      const boardSectionRegex = /(board\s+of\s+directors|board\s+members|directors|trustees|advisory\s+board)/gi;
+      const htmlLower = originalHtml.toLowerCase();
+      const hasBoardSection = boardSectionRegex.test(htmlLower);
+      
+      if (!hasBoardSection) {
+        this.testResults.push({
+          test: testName,
+          passed: true,
+          message: '✅ No board section detected - test not applicable',
+          details: { board_section_found: false }
+        });
+        this.passedTests++;
+        return;
+      }
+      
+      // Find blocks that were classified as board_list
+      const boardBlocks = semanticBlocks.filter(block => 
+        block.predicted_type === 'board_list' || 
+        (block.block_text && boardSectionRegex.test(block.block_text))
+      );
+      
+      // Check that board members don't appear in staff results
+      let boardContamination = 0;
+      for (const item of extractedData || []) {
+        for (const boardBlock of boardBlocks) {
+          if (boardBlock.block_text && 
+              boardBlock.block_text.toLowerCase().includes((item.name || '').toLowerCase()) &&
+              item.name && item.name.length > 3) {
+            boardContamination++;
+            break;
+          }
+        }
+      }
+      
+      const passed = boardContamination === 0;
+      if (passed) this.passedTests++;
+      
+      this.testResults.push({
+        test: testName,
+        passed: passed,
+        message: passed 
+          ? `✅ Board/staff separation maintained (${boardBlocks.length} board blocks filtered)`
+          : `❌ Found ${boardContamination} board members in staff results`,
+        details: {
+          board_section_detected: hasBoardSection,
+          board_blocks_found: boardBlocks.length,
+          contaminated_items: boardContamination,
+          board_block_samples: boardBlocks.slice(0, 2).map(b => ({
+            predicted_type: b.predicted_type,
+            text_preview: b.block_text?.substring(0, 150) + '...'
+          }))
+        }
+      });
+      
+    } catch (error) {
+      this.testResults.push({
+        test: testName,
+        passed: false,
+        message: `❌ Test failed: ${error.message}`,
+        details: { error: error.message }
+      });
+    }
+  }
+  
+  /**
+   * Test 3: Boundary Test
+   * h3 name + role word + paragraphs → clean name/title/bio separation
+   */
+  async testCleanBoundaries(extractedData) {
+    const testName = 'Clean Boundaries Test';
+    this.totalTests++;
+    
+    try {
+      let cleanBoundaries = 0;
+      let totalItems = extractedData?.length || 0;
+      
+      if (totalItems === 0) {
+        this.testResults.push({
+          test: testName,
+          passed: false,
+          message: '❌ No extracted data to test boundaries',
+          details: { items_count: 0 }
+        });
+        return;
+      }
+      
+      for (const item of extractedData) {
+        const hasCleanName = item.name && 
+                            item.name.length >= 5 && 
+                            item.name.length <= 50 &&
+                            !/\d/.test(item.name) &&
+                            !item.name.toLowerCase().includes('staff');
+                            
+        const hasCleanTitle = item.title && 
+                             item.title.length >= 3 && 
+                             item.title.length <= 120 &&
+                             !item.title.toLowerCase().includes('staff');
+                             
+        const hasCleanBio = item.bio && 
+                           item.bio.length >= 20 &&
+                           item.bio.length <= 2000 &&
+                           !item.bio.toLowerCase().startsWith('staff');
+        
+        if (hasCleanName && hasCleanTitle && hasCleanBio) {
+          cleanBoundaries++;
+        }
+      }
+      
+      const cleanRatio = cleanBoundaries / totalItems;
+      const passed = cleanRatio >= 0.8; // 80% should have clean boundaries
+      if (passed) this.passedTests++;
+      
+      this.testResults.push({
+        test: testName,
+        passed: passed,
+        message: passed 
+          ? `✅ Clean boundaries: ${cleanBoundaries}/${totalItems} items (${(cleanRatio * 100).toFixed(1)}%)`
+          : `❌ Poor boundaries: only ${cleanBoundaries}/${totalItems} clean (${(cleanRatio * 100).toFixed(1)}%)`,
+        details: {
+          items_with_clean_boundaries: cleanBoundaries,
+          total_items: totalItems,
+          clean_boundary_ratio: cleanRatio,
+          sample_issues: extractedData.slice(0, 3).map(item => ({
+            name: item.name,
+            name_issues: this.identifyNameIssues(item.name),
+            title_issues: this.identifyTitleIssues(item.title),
+            bio_issues: this.identifyBioIssues(item.bio)
+          })).filter(sample => 
+            sample.name_issues.length > 0 || 
+            sample.title_issues.length > 0 || 
+            sample.bio_issues.length > 0
+          )
+        }
+      });
+      
+    } catch (error) {
+      this.testResults.push({
+        test: testName,
+        passed: false,
+        message: `❌ Test failed: ${error.message}`,
+        details: { error: error.message }
+      });
+    }
+  }
+  
+  /**
+   * Test 4: Minimum Results Test
+   * ≥N profile_cards should yield ≥N results unless budget hit
+   */
+  async testMinimumResults(semanticBlocks, extractedData, budgetUsed) {
+    const testName = 'Minimum Results Test';
+    this.totalTests++;
+    
+    try {
+      const profileBlocks = semanticBlocks.filter(block => 
+        block.predicted_type === 'profile_card' && 
+        (block.type_confidence || 0) >= 0.6
+      );
+      
+      const extractedCount = extractedData?.length || 0;
+      const profileBlocksCount = profileBlocks.length;
+      
+      // Expected: at least 50% of high-confidence profile blocks should yield results
+      const expectedMinimum = Math.max(1, Math.floor(profileBlocksCount * 0.5));
+      
+      // Check if budget constraints caused the shortfall
+      const budgetHit = (budgetUsed?.time || 0) > 15000 || 
+                       (budgetUsed?.tokens || 0) > 800 ||
+                       (budgetUsed?.requests || 0) > 3;
+      
+      const passed = extractedCount >= expectedMinimum || budgetHit;
+      if (passed) this.passedTests++;
+      
+      this.testResults.push({
+        test: testName,
+        passed: passed,
+        message: passed 
+          ? `✅ Adequate results: ${extractedCount} extracted from ${profileBlocksCount} candidates`
+          : `❌ Low yield: only ${extractedCount} extracted from ${profileBlocksCount} candidates (expected ≥${expectedMinimum})`,
+        details: {
+          profile_blocks_detected: profileBlocksCount,
+          items_extracted: extractedCount,
+          expected_minimum: expectedMinimum,
+          yield_ratio: profileBlocksCount > 0 ? extractedCount / profileBlocksCount : 0,
+          budget_hit: budgetHit,
+          budget_used: budgetUsed
+        }
+      });
+      
+    } catch (error) {
+      this.testResults.push({
+        test: testName,
+        passed: false,
+        message: `❌ Test failed: ${error.message}`,
+        details: { error: error.message }
+      });
+    }
+  }
+  
+  /**
+   * Test 5: Data Quality Test
+   * Validate that extracted data meets quality standards
+   */
+  async testDataQuality(extractedData) {
+    const testName = 'Data Quality Test';
+    this.totalTests++;
+    
+    try {
+      if (!extractedData || extractedData.length === 0) {
+        this.testResults.push({
+          test: testName,
+          passed: false,
+          message: '❌ No data to test quality',
+          details: { items_count: 0 }
+        });
+        return;
+      }
+      
+      let highQualityItems = 0;
+      const qualityIssues = [];
+      
+      for (const item of extractedData) {
+        const issues = [];
+        
+        // Name quality checks
+        if (!item.name || item.name.length < 5) issues.push('name_too_short');
+        if (item.name && /\d/.test(item.name)) issues.push('name_has_digits');
+        if (item.name && item.name.toLowerCase().includes('staff')) issues.push('name_contamination');
+        
+        // Title quality checks
+        if (!item.title || item.title.length < 3) issues.push('title_missing_or_short');
+        if (item.title && item.title.toLowerCase().includes('staff')) issues.push('title_contamination');
+        
+        // Bio quality checks
+        if (!item.bio || item.bio.length < 20) issues.push('bio_too_short');
+        if (item.bio && item.bio.toLowerCase().startsWith('staff')) issues.push('bio_contamination');
+        
+        if (issues.length === 0) {
+          highQualityItems++;
+        } else {
+          qualityIssues.push({ name: item.name, issues: issues });
+        }
+      }
+      
+      const qualityRatio = highQualityItems / extractedData.length;
+      const passed = qualityRatio >= 0.7; // 70% should be high quality
+      if (passed) this.passedTests++;
+      
+      this.testResults.push({
+        test: testName,
+        passed: passed,
+        message: passed 
+          ? `✅ High quality: ${highQualityItems}/${extractedData.length} items (${(qualityRatio * 100).toFixed(1)}%)`
+          : `❌ Quality issues: only ${highQualityItems}/${extractedData.length} high quality (${(qualityRatio * 100).toFixed(1)}%)`,
+        details: {
+          high_quality_items: highQualityItems,
+          total_items: extractedData.length,
+          quality_ratio: qualityRatio,
+          sample_issues: qualityIssues.slice(0, 5)
+        }
+      });
+      
+    } catch (error) {
+      this.testResults.push({
+        test: testName,
+        passed: false,
+        message: `❌ Test failed: ${error.message}`,
+        details: { error: error.message }
+      });
+    }
+  }
+  
+  /**
+   * Test 6: Confidence Calibration Test
+   * Items with high confidence should actually be high quality
+   */
+  async testConfidenceCalibration(extractedData) {
+    const testName = 'Confidence Calibration Test';
+    this.totalTests++;
+    
+    try {
+      if (!extractedData || extractedData.length === 0) {
+        this.testResults.push({
+          test: testName,
+          passed: false,
+          message: '❌ No data to test confidence calibration',
+          details: { items_count: 0 }
+        });
+        return;
+      }
+      
+      const highConfidenceItems = extractedData.filter(item => (item.confidence || 0) >= 0.8);
+      
+      if (highConfidenceItems.length === 0) {
+        this.testResults.push({
+          test: testName,
+          passed: true,
+          message: '✅ No high-confidence items to calibrate - test passes',
+          details: { high_confidence_items: 0 }
+        });
+        this.passedTests++;
+        return;
+      }
+      
+      let wellCalibratedItems = 0;
+      
+      for (const item of highConfidenceItems) {
+        // High confidence items should have complete data
+        const isComplete = item.name && item.name.length >= 5 &&
+                          item.title && item.title.length >= 5 &&
+                          item.bio && item.bio.length >= 50;
+                          
+        if (isComplete) {
+          wellCalibratedItems++;
+        }
+      }
+      
+      const calibrationRatio = wellCalibratedItems / highConfidenceItems.length;
+      const passed = calibrationRatio >= 0.8; // 80% of high-confidence should be complete
+      if (passed) this.passedTests++;
+      
+      this.testResults.push({
+        test: testName,
+        passed: passed,
+        message: passed 
+          ? `✅ Well calibrated: ${wellCalibratedItems}/${highConfidenceItems.length} high-confidence items complete`
+          : `❌ Poor calibration: only ${wellCalibratedItems}/${highConfidenceItems.length} high-confidence items complete`,
+        details: {
+          high_confidence_items: highConfidenceItems.length,
+          well_calibrated_items: wellCalibratedItems,
+          calibration_ratio: calibrationRatio,
+          confidence_distribution: this.calculateConfidenceDistribution(extractedData)
+        }
+      });
+      
+    } catch (error) {
+      this.testResults.push({
+        test: testName,
+        passed: false,
+        message: `❌ Test failed: ${error.message}`,
+        details: { error: error.message }
+      });
+    }
+  }
+  
+  /**
+   * Test 7: VMOTA Success Criteria Test
+   * Validate specific VMOTA staff extraction requirements
+   */
+  async testVMOTASuccessCriteria(extractedData, originalHtml) {
+    const testName = 'VMOTA Success Criteria Test';
+    
+    // Only run this test for VMOTA URLs
+    if (!originalHtml.toLowerCase().includes('vmota') && !originalHtml.toLowerCase().includes('visual media outreach')) {
+      return; // Skip this test for non-VMOTA sites
+    }
+    
+    this.totalTests++;
+    
+    try {
+      const expectedStaff = [
+        { name: 'Katrina Bruins', title: 'Executive Director' },
+        { name: 'Lauryn Dove', title: 'Administrative Assistant' },
+        { name: 'Joel Ellazar', title: 'Marketing Specialist' },
+        { name: 'Armando Garcia', title: 'Curatorial and Education Manager' },
+        { name: 'Jane La Motte', title: 'Website Manager' },
+        { name: 'Nilufer Leuthold', title: 'Director of Development' }
+      ];
+      
+      const extractedCount = extractedData?.length || 0;
+      let correctExtractions = 0;
+      let cleanDataCount = 0;
+      let boardContamination = 0;
+      
+      // Check for each expected staff member
+      for (const expectedMember of expectedStaff) {
+        const found = extractedData?.find(item => 
+          item.name && item.name.toLowerCase().includes(expectedMember.name.toLowerCase())
+        );
+        
+        if (found) {
+          correctExtractions++;
+          
+          // Check for clean data (no "Staff" contamination)
+          const hasCleanData = !found.name.toLowerCase().includes('staff') &&
+                              !found.title.toLowerCase().includes('staff') &&
+                              !found.bio?.toLowerCase().startsWith('staff');
+          
+          if (hasCleanData) {
+            cleanDataCount++;
+          }
+        }
+      }
+      
+      // Check for board contamination
+      if (originalHtml.toLowerCase().includes('board of directors')) {
+        for (const item of extractedData || []) {
+          if (item.bio && item.bio.toLowerCase().includes('board')) {
+            boardContamination++;
+          }
+        }
+      }
+      
+      // Success criteria checks
+      const hasMinimumStaff = correctExtractions >= 6; // At least 6 of the expected staff
+      const hasCleanData = cleanDataCount >= correctExtractions * 0.8; // 80% clean data
+      const hasMajorityFound = extractedCount >= 6; // At least 6 total extractions
+      const noBoardContamination = boardContamination === 0;
+      
+      const passed = hasMinimumStaff && hasCleanData && hasMajorityFound && noBoardContamination;
+      if (passed) this.passedTests++;
+      
+      this.testResults.push({
+        test: testName,
+        passed: passed,
+        message: passed 
+          ? `✅ VMOTA Success: ${correctExtractions}/6 expected staff extracted with clean data`
+          : `❌ VMOTA Failed: only ${correctExtractions}/6 expected staff found, ${cleanDataCount} clean, ${boardContamination} board contaminated`,
+        details: {
+          expected_staff_count: expectedStaff.length,
+          correct_extractions: correctExtractions,
+          total_extractions: extractedCount,
+          clean_data_count: cleanDataCount,
+          board_contamination: boardContamination,
+          success_criteria: {
+            minimum_staff: hasMinimumStaff,
+            clean_data: hasCleanData,
+            majority_found: hasMajorityFound,
+            no_board_contamination: noBoardContamination
+          },
+          found_staff: extractedData?.map(item => ({
+            name: item.name,
+            title: item.title,
+            expected_match: expectedStaff.find(exp => 
+              item.name && item.name.toLowerCase().includes(exp.name.toLowerCase())
+            )?.name || 'unexpected'
+          })) || []
+        }
+      });
+      
+    } catch (error) {
+      this.testResults.push({
+        test: testName,
+        passed: false,
+        message: `❌ Test failed: ${error.message}`,
+        details: { error: error.message }
+      });
+    }
+  }
+  
+  // Helper methods for quality assessment
+  identifyNameIssues(name) {
+    const issues = [];
+    if (!name) issues.push('missing');
+    else {
+      if (name.length < 5) issues.push('too_short');
+      if (name.length > 50) issues.push('too_long');
+      if (/\d/.test(name)) issues.push('has_digits');
+      if (name.toLowerCase().includes('staff')) issues.push('contamination');
+    }
+    return issues;
+  }
+  
+  identifyTitleIssues(title) {
+    const issues = [];
+    if (!title) issues.push('missing');
+    else {
+      if (title.length < 3) issues.push('too_short');
+      if (title.length > 120) issues.push('too_long');
+      if (title.toLowerCase().includes('staff')) issues.push('contamination');
+    }
+    return issues;
+  }
+  
+  identifyBioIssues(bio) {
+    const issues = [];
+    if (!bio) issues.push('missing');
+    else {
+      if (bio.length < 20) issues.push('too_short');
+      if (bio.length > 2000) issues.push('too_long');
+      if (bio.toLowerCase().startsWith('staff')) issues.push('contamination');
+    }
+    return issues;
+  }
+  
+  calculateConfidenceDistribution(extractedData) {
+    const buckets = { 'low (0-0.5)': 0, 'medium (0.5-0.8)': 0, 'high (0.8-1.0)': 0 };
+    
+    for (const item of extractedData) {
+      const confidence = item.confidence || 0;
+      if (confidence < 0.5) buckets['low (0-0.5)']++;
+      else if (confidence < 0.8) buckets['medium (0.5-0.8)']++;
+      else buckets['high (0.8-1.0)']++;
+    }
+    
+    return buckets;
+  }
+}
+
+/**
+ * Comprehensive Logging System v0.1 - Detailed audit trail for all decisions
+ * Tracks: block classification, field mapping, filtering, confidence scoring
+ */
+class ComprehensiveLogger {
+  constructor() {
+    this.auditTrail = [];
+    this.decisionPoints = [];
+    this.filteringSteps = [];
+    this.budgetLedger = [];
+    this.confidenceLogs = [];
+  }
+  
+  /**
+   * Initialize logging for a new extraction session
+   */
+  startExtractionSession(taskId, url) {
+    this.auditTrail = [];
+    this.sessionId = taskId;
+    this.sessionStart = Date.now();
+    
+    this.logDecision('session_start', {
+      session_id: taskId,
+      url: url,
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  /**
+   * Log a major decision point with reasoning
+   */
+  logDecision(decision_type, data, reasoning = null) {
+    const entry = {
+      timestamp: Date.now(),
+      session_time: Date.now() - this.sessionStart,
+      decision_type: decision_type,
+      data: data,
+      reasoning: reasoning,
+      trace_id: `${this.sessionId}_${this.auditTrail.length}`
+    };
+    
+    this.auditTrail.push(entry);
+    this.decisionPoints.push(entry);
+    
+    // Also log to console for real-time debugging
+    console.log(`📊 DECISION [${decision_type}]: ${reasoning || JSON.stringify(data)}`);
+  }
+  
+  /**
+   * Log filtering steps with before/after counts
+   */
+  logFilteringStep(filter_name, before_count, after_count, reasoning, filtered_items = null) {
+    const filterStep = {
+      timestamp: Date.now(),
+      session_time: Date.now() - this.sessionStart,
+      filter_name: filter_name,
+      before_count: before_count,
+      after_count: after_count,
+      filtered_count: before_count - after_count,
+      filtering_ratio: before_count > 0 ? (before_count - after_count) / before_count : 0,
+      reasoning: reasoning,
+      sample_filtered: filtered_items ? filtered_items.slice(0, 3) : null
+    };
+    
+    this.filteringSteps.push(filterStep);
+    this.logDecision('filtering_step', filterStep, `${filter_name}: ${before_count} → ${after_count} (${filterStep.filtered_count} filtered)`);
+  }
+  
+  /**
+   * Log budget usage
+   */
+  logBudgetUsage(operation, cost_breakdown, cumulative_usage) {
+    const budgetEntry = {
+      timestamp: Date.now(),
+      session_time: Date.now() - this.sessionStart,
+      operation: operation,
+      cost_breakdown: cost_breakdown,
+      cumulative_usage: cumulative_usage,
+      budget_remaining: {
+        time: Math.max(0, (cumulative_usage.max_time || 20000) - (cumulative_usage.time || 0)),
+        tokens: Math.max(0, (cumulative_usage.max_tokens || 800) - (cumulative_usage.tokens || 0)),
+        requests: Math.max(0, (cumulative_usage.max_requests || 3) - (cumulative_usage.requests || 0))
+      }
+    };
+    
+    this.budgetLedger.push(budgetEntry);
+    this.logDecision('budget_usage', budgetEntry, `${operation}: ${JSON.stringify(cost_breakdown)}`);
+  }
+  
+  /**
+   * Log confidence scoring details
+   */
+  logConfidenceScoring(item_id, field_confidences, overall_confidence, confidence_sources, methodology) {
+    const confidenceEntry = {
+      timestamp: Date.now(),
+      session_time: Date.now() - this.sessionStart,
+      item_id: item_id,
+      field_confidences: field_confidences,
+      overall_confidence: overall_confidence,
+      confidence_sources: confidence_sources,
+      methodology: methodology,
+      confidence_tier: this.categorizeConfidence(overall_confidence)
+    };
+    
+    this.confidenceLogs.push(confidenceEntry);
+    this.logDecision('confidence_scoring', confidenceEntry, 
+      `Item ${item_id}: ${overall_confidence.toFixed(2)} confidence (${methodology})`);
+  }
+  
+  /**
+   * Log block classification with labeling function votes
+   */
+  logBlockClassification(block, labeling_votes, final_prediction, filtering_decision) {
+    this.logDecision('block_classification', {
+      block_id: block.root_selector,
+      block_heading: block.heading,
+      text_preview: block.block_text?.substring(0, 100) + '...',
+      link_density: block.link_density,
+      text_density: block.text_density,
+      labeling_votes: labeling_votes,
+      final_prediction: final_prediction,
+      type_confidence: final_prediction.confidence,
+      labeling_agreement: final_prediction.agreement,
+      filtering_decision: filtering_decision
+    }, `Classified as ${final_prediction.type} (${final_prediction.confidence.toFixed(2)} conf, ${final_prediction.agreement.toFixed(2)} agree)`);
+  }
+  
+  /**
+   * Log field mapping details
+   */
+  logFieldMapping(block, field_mappings, mapping_sources, mapping_confidence) {
+    this.logDecision('field_mapping', {
+      block_id: block.root_selector,
+      field_mappings: field_mappings,
+      mapping_sources: mapping_sources,
+      mapping_confidence: mapping_confidence,
+      mapped_fields: Object.keys(field_mappings || {}),
+      missing_fields: this.identifyMissingFields(field_mappings)
+    }, `Mapped ${Object.keys(field_mappings || {}).length} fields with ${mapping_confidence.toFixed(2)} confidence`);
+  }
+  
+  /**
+   * Generate comprehensive extraction report
+   */
+  generateExtractionReport(final_results, evaluation_score) {
+    const sessionEnd = Date.now();
+    const totalTime = sessionEnd - this.sessionStart;
+    
+    const report = {
+      session_summary: {
+        session_id: this.sessionId,
+        total_duration_ms: totalTime,
+        total_decisions: this.decisionPoints.length,
+        total_filtering_steps: this.filteringSteps.length,
+        final_results_count: final_results?.length || 0,
+        evaluation_score: evaluation_score
+      },
+      
+      decision_timeline: this.auditTrail.map(entry => ({
+        time_offset: entry.session_time,
+        decision: entry.decision_type,
+        reasoning: entry.reasoning,
+        key_data: this.extractKeyData(entry)
+      })),
+      
+      filtering_audit: {
+        total_steps: this.filteringSteps.length,
+        total_items_filtered: this.filteringSteps.reduce((sum, step) => sum + step.filtered_count, 0),
+        filtering_efficiency: this.calculateFilteringEfficiency(),
+        step_by_step: this.filteringSteps.map(step => ({
+          filter: step.filter_name,
+          before: step.before_count,
+          after: step.after_count,
+          filtered: step.filtered_count,
+          reasoning: step.reasoning
+        }))
+      },
+      
+      confidence_analysis: {
+        items_scored: this.confidenceLogs.length,
+        confidence_distribution: this.calculateConfidenceDistribution(),
+        high_confidence_items: this.confidenceLogs.filter(log => log.overall_confidence >= 0.8).length,
+        low_confidence_items: this.confidenceLogs.filter(log => log.overall_confidence < 0.5).length,
+        confidence_calibration: this.analyzeConfidenceCalibration(final_results)
+      },
+      
+      budget_analysis: {
+        total_operations: this.budgetLedger.length,
+        final_usage: this.budgetLedger.length > 0 ? this.budgetLedger[this.budgetLedger.length - 1].cumulative_usage : {},
+        cost_breakdown_by_operation: this.analyzeCostsByOperation(),
+        budget_efficiency: this.calculateBudgetEfficiency(final_results?.length || 0)
+      },
+      
+      decision_patterns: {
+        most_common_decisions: this.getMostCommonDecisions(),
+        decision_velocity: this.calculateDecisionVelocity(),
+        critical_decision_points: this.identifyCriticalDecisions()
+      },
+      
+      quality_indicators: {
+        answers_why_keep_drop: this.validateDecisionTraceability(),
+        audit_completeness: this.checkAuditCompleteness(),
+        missing_decision_points: this.identifyMissingDecisions()
+      }
+    };
+    
+    console.log(`📊 Generated comprehensive extraction report: ${this.decisionPoints.length} decisions, ${this.filteringSteps.length} filtering steps`);
+    
+    return report;
+  }
+  
+  // Helper methods for report generation
+  categorizeConfidence(confidence) {
+    if (confidence >= 0.8) return 'high';
+    if (confidence >= 0.5) return 'medium';
+    return 'low';
+  }
+  
+  extractKeyData(entry) {
+    // Extract most important data points for timeline
+    switch (entry.decision_type) {
+      case 'block_classification':
+        return { 
+          prediction: entry.data.final_prediction?.type, 
+          confidence: entry.data.final_prediction?.confidence 
+        };
+      case 'filtering_step':
+        return { 
+          before: entry.data.before_count, 
+          after: entry.data.after_count 
+        };
+      case 'confidence_scoring':
+        return { 
+          confidence: entry.data.overall_confidence 
+        };
+      default:
+        return {};
+    }
+  }
+  
+  calculateFilteringEfficiency() {
+    if (this.filteringSteps.length === 0) return 0;
+    
+    const totalFiltered = this.filteringSteps.reduce((sum, step) => sum + step.filtered_count, 0);
+    const initialCount = this.filteringSteps[0]?.before_count || 0;
+    
+    return initialCount > 0 ? totalFiltered / initialCount : 0;
+  }
+  
+  calculateConfidenceDistribution() {
+    if (this.confidenceLogs.length === 0) return {};
+    
+    const distribution = { high: 0, medium: 0, low: 0 };
+    this.confidenceLogs.forEach(log => {
+      const tier = this.categorizeConfidence(log.overall_confidence);
+      distribution[tier]++;
+    });
+    
+    return distribution;
+  }
+  
+  analyzeConfidenceCalibration(finalResults) {
+    // Check if high confidence items actually have high quality
+    const highConfLogs = this.confidenceLogs.filter(log => log.overall_confidence >= 0.8);
+    const highConfResults = finalResults?.filter(item => (item.confidence || 0) >= 0.8) || [];
+    
+    return {
+      high_conf_predicted: highConfLogs.length,
+      high_conf_delivered: highConfResults.length,
+      calibration_ratio: highConfLogs.length > 0 ? highConfResults.length / highConfLogs.length : 0
+    };
+  }
+  
+  analyzeCostsByOperation() {
+    const costsByOp = {};
+    this.budgetLedger.forEach(entry => {
+      const op = entry.operation;
+      if (!costsByOp[op]) {
+        costsByOp[op] = { time: 0, tokens: 0, requests: 0, count: 0 };
+      }
+      costsByOp[op].time += entry.cost_breakdown.time || 0;
+      costsByOp[op].tokens += entry.cost_breakdown.tokens || 0;
+      costsByOp[op].requests += entry.cost_breakdown.requests || 0;
+      costsByOp[op].count++;
+    });
+    
+    return costsByOp;
+  }
+  
+  calculateBudgetEfficiency(finalResultsCount) {
+    if (this.budgetLedger.length === 0) return 0;
+    
+    const finalUsage = this.budgetLedger[this.budgetLedger.length - 1].cumulative_usage;
+    const totalCost = (finalUsage.time || 0) + (finalUsage.tokens || 0) * 10 + (finalUsage.requests || 0) * 1000;
+    
+    return finalResultsCount > 0 && totalCost > 0 ? finalResultsCount / totalCost * 10000 : 0; // Results per 10k cost units
+  }
+  
+  getMostCommonDecisions() {
+    const decisionCounts = {};
+    this.decisionPoints.forEach(decision => {
+      decisionCounts[decision.decision_type] = (decisionCounts[decision.decision_type] || 0) + 1;
+    });
+    
+    return Object.entries(decisionCounts)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 5);
+  }
+  
+  calculateDecisionVelocity() {
+    if (this.decisionPoints.length < 2) return 0;
+    
+    const totalTime = this.decisionPoints[this.decisionPoints.length - 1].session_time;
+    return totalTime > 0 ? (this.decisionPoints.length / totalTime) * 1000 : 0; // Decisions per second
+  }
+  
+  identifyCriticalDecisions() {
+    // Decisions that significantly changed the result count
+    return this.filteringSteps
+      .filter(step => step.filtering_ratio > 0.3) // More than 30% filtered
+      .map(step => ({
+        filter: step.filter_name,
+        impact: step.filtering_ratio,
+        reasoning: step.reasoning
+      }));
+  }
+  
+  validateDecisionTraceability() {
+    // Check if each filtering decision can be traced back to reasoning
+    const traceableDecisions = this.filteringSteps.filter(step => 
+      step.reasoning && step.reasoning.length > 10
+    ).length;
+    
+    return {
+      traceable_decisions: traceableDecisions,
+      total_decisions: this.filteringSteps.length,
+      traceability_ratio: this.filteringSteps.length > 0 ? traceableDecisions / this.filteringSteps.length : 0
+    };
+  }
+  
+  checkAuditCompleteness() {
+    const requiredDecisionTypes = [
+      'session_start', 'block_classification', 'filtering_step', 
+      'field_mapping', 'confidence_scoring'
+    ];
+    
+    const presentTypes = [...new Set(this.decisionPoints.map(d => d.decision_type))];
+    const missingTypes = requiredDecisionTypes.filter(type => !presentTypes.includes(type));
+    
+    return {
+      required_types: requiredDecisionTypes.length,
+      present_types: presentTypes.length,
+      missing_types: missingTypes,
+      completeness_ratio: requiredDecisionTypes.length > 0 ? 
+        (requiredDecisionTypes.length - missingTypes.length) / requiredDecisionTypes.length : 1
+    };
+  }
+  
+  identifyMissingDecisions() {
+    const gaps = [];
+    
+    // Check for large time gaps without decisions (>2 seconds)
+    for (let i = 1; i < this.decisionPoints.length; i++) {
+      const timeDiff = this.decisionPoints[i].session_time - this.decisionPoints[i-1].session_time;
+      if (timeDiff > 2000) {
+        gaps.push({
+          gap_start: this.decisionPoints[i-1].session_time,
+          gap_duration: timeDiff,
+          potential_missing_decision: 'Processing activity not logged'
+        });
+      }
+    }
+    
+    return gaps;
+  }
+  
+  identifyMissingFields(fieldMappings) {
+    const requiredFields = ['name', 'title', 'bio'];
+    return requiredFields.filter(field => !fieldMappings || !fieldMappings[field]);
+  }
+}
+
+/**
  * Simple Evaluator v0.1 - Scores extraction results for learning
  */
 class SimpleEvaluator {
@@ -3050,12 +4408,25 @@ async function processWithPlanBasedSystem(content, params) {
     const evaluator = new SimpleEvaluator();
     const evaluation = evaluator.evaluate(executionResult, params.outputSchema);
     
+    // Initialize comprehensive logging
+    const logger = new ComprehensiveLogger();
+    logger.startExtractionSession(plan.task_id, params.url);
+    
+    // Generate comprehensive audit report
+    const auditReport = logger.generateExtractionReport(executionResult.data, evaluation.overall_score);
+    
+    // Generic pattern testing
+    const patternTests = new GenericPatternTests();
+    const semanticBlocks = executionResult.context_final?.semantic_blocks || [];
+    const testResults = await patternTests.runAllTests(executionResult, semanticBlocks, content);
+    
     // Active learning analysis
     const activeLearning = new ActiveLearningQueue();
-    const semanticBlocks = executionResult.context_final?.semantic_blocks || [];
     const learningAnalysis = activeLearning.analyzeForLearning(executionResult, semanticBlocks, evaluation);
     
     console.log(`✅ Plan-based extraction completed with score: ${evaluation.overall_score.toFixed(2)}`);
+    console.log(`🧪 Pattern tests: ${testResults.passed}/${testResults.total} passed (${(testResults.pass_rate * 100).toFixed(1)}%)`);
+    console.log(`📊 Audit report: ${auditReport.session_summary.total_decisions} decisions, ${auditReport.filtering_audit.total_steps} filtering steps`);
     console.log(`🎓 Learning value: ${learningAnalysis.learning_value_score.toFixed(2)} (${learningAnalysis.queue_status.total_queued} cases queued)`);
     
     return {
@@ -3077,6 +4448,10 @@ async function processWithPlanBasedSystem(content, params) {
           pass_b_results: executionResult.pass_b_results,
           efficiency_gain: executionResult.efficiency_gain
         }),
+        // Testing metadata
+        pattern_tests: testResults,
+        // Comprehensive audit trail
+        audit_report: auditReport,
         // Active learning metadata
         learning_analysis: learningAnalysis
       }
