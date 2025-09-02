@@ -26,14 +26,16 @@ provider:
 package:
   individually: true
   patterns:
-    - '!packages/frontend/**'
-    - '!packages/worker/**'
-    - '!packages/core/src/**'
+    - '!packages/**'
+    - '!node_modules/**'
     - '!.git/**'
     - '!.github/**'
     - '!*.md'
     - '!test/**'
     - '!tests/**'
+    - '!.claude/**'
+    - '!.serverless/**'
+    - 'api/**'
 
 functions:
   api:

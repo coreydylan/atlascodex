@@ -190,15 +190,16 @@ function processWithRules(userInput) {
     }
   };
   
-  // Check for specific data requests
+  // Check for specific data requests - be more aggressive about using structured format
   const needsStructured = 
     input.includes('top ') ||
-    input.includes('list of') ||
+    input.includes('list') ||
     input.includes('articles') ||
     input.includes('products') ||
     input.includes('prices') ||
-    input.includes('get me') ||
-    input.includes('find all');
+    input.includes('get') ||
+    input.includes('find') ||
+    input.match(/\d+\s+(articles?|items?|products?|stories?|posts?)/i);
   
   // Extract URL
   const urlMatch = userInput.match(/(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+(?:\/[^\s]*)?)/);
@@ -249,21 +250,29 @@ function processWithRules(userInput) {
     formats.push('structured');
     
     // Generate extraction instructions based on request
-    if (input.includes('top 10') || input.includes('top ten')) {
-      result.params.extractionInstructions = 'Extract the top 10 items from the page';
+    if (input.includes('top 10') || input.includes('top ten') || input.match(/10\s+articles?/i)) {
+      result.params.extractionInstructions = 'Extract the top 10 article headlines with their links and summaries from the homepage';
       result.params.outputSchema = {
-        type: 'array',
-        maxItems: 10,
-        items: {
-          type: 'object',
-          properties: {
-            title: { type: 'string' },
-            url: { type: 'string' },
-            description: { type: 'string' }
-          }
+        type: 'object',
+        properties: {
+          articles: {
+            type: 'array',
+            maxItems: 10,
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                url: { type: 'string' },
+                summary: { type: 'string' },
+                author: { type: 'string' },
+                section: { type: 'string' }
+              }
+            }
+          },
+          extractedAt: { type: 'string' }
         }
       };
-      result.params.postProcessing = 'Return only the top 10 items as a structured array';
+      result.params.postProcessing = 'Return only the top 10 articles as a structured JSON array with title, url, summary, author, and section for each article';
     } else if (input.includes('articles')) {
       const count = input.match(/(\d+)\s*articles/);
       const limit = count ? parseInt(count[1]) : 10;
