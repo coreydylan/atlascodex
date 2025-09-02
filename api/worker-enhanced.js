@@ -116,6 +116,17 @@ const SKILLS_REGISTRY = {
     repair_options: ['approximate_citation']
   },
   
+  'RankCandidates': {
+    description: 'Rank semantic blocks as candidates for Pass B processing',
+    inputs: ['semantic_blocks', 'constraints'],
+    outputs: ['top_candidates', 'candidate_scores'],
+    cost: { tokens: 0, requests: 0, cpu: 'low' },
+    preconditions: ['blocks_identified'],
+    postconditions: ['candidates_ranked'],
+    failure_modes: ['insufficient_candidates'],
+    repair_options: ['lower_threshold', 'expand_candidates']
+  },
+  
   'RankResults': {
     description: 'Rank and order results by confidence, completeness, and tie-breakers',
     inputs: ['field_mappings', 'mapping_confidence', 'constraints'],
@@ -237,6 +248,9 @@ class PlanExecutor {
           break;
         case 'CiteEvidence':
           result = await this.skillCiteEvidence(step.params);
+          break;
+        case 'RankCandidates':
+          result = await this.skillRankCandidates(step.params);
           break;
         case 'RankResults':
           result = await this.skillRankResults(step.params);
@@ -426,26 +440,31 @@ class PlanExecutor {
       
       console.log(`📦 Discovered ${semanticBlocks.length} semantic blocks`);
       
+      // Apply weak supervision to classify and filter blocks
+      const classifiedBlocks = this.applyWeakSupervision(semanticBlocks);
+      
       // Debug: Log first block structure
-      if (semanticBlocks.length > 0) {
-        const sample = semanticBlocks[0];
-        console.log('🐛 Sample block structure:', {
+      if (classifiedBlocks.length > 0) {
+        const sample = classifiedBlocks[0];
+        console.log('🐛 Sample classified block:', {
           selector: sample.root_selector,
           heading: sample.heading,
-          text_preview: sample.block_text.substring(0, 100) + '...',
-          link_density: sample.link_density,
-          text_density: sample.text_density
+          predicted_type: sample.predicted_type,
+          type_confidence: sample.type_confidence,
+          labeling_agreement: sample.labeling_agreement,
+          text_preview: sample.block_text.substring(0, 100) + '...'
         });
       }
       
       return {
         success: true,
         outputs: {
-          semantic_blocks: semanticBlocks,
-          block_count: semanticBlocks.length
+          semantic_blocks: classifiedBlocks, // Use classified/filtered blocks
+          block_count: classifiedBlocks.length,
+          raw_block_count: semanticBlocks.length // Keep original count for analysis
         },
         cost: { tokens: 0, requests: 0 },
-        confidence: 0.8
+        confidence: 0.85 // Higher confidence with weak supervision
       };
     } catch (error) {
       return { success: false, error: error.message, cost: { tokens: 0, requests: 0 } };
@@ -597,6 +616,70 @@ class PlanExecutor {
     }
   }
   
+  async skillRankCandidates(params = {}) {
+    const semanticBlocks = this.context.get('semantic_blocks') || [];
+    const maxCandidates = params.max_candidates || 15;
+    const rankingCriteria = params.ranking_criteria || ['type_confidence', 'labeling_agreement', 'relevance_score'];
+    
+    try {
+      if (semanticBlocks.length === 0) {
+        return { success: false, error: 'No semantic blocks to rank', cost: { tokens: 0, requests: 0 } };
+      }
+      
+      // Score each block based on multiple criteria
+      const scoredCandidates = semanticBlocks.map(block => {
+        const scores = {};
+        let totalScore = 0;
+        
+        // Score based on type confidence (from weak supervision)
+        if (rankingCriteria.includes('type_confidence')) {
+          scores.type_confidence = block.type_confidence || 0;
+          totalScore += scores.type_confidence * 0.4; // 40% weight
+        }
+        
+        // Score based on labeling agreement
+        if (rankingCriteria.includes('labeling_agreement')) {
+          scores.labeling_agreement = block.labeling_agreement || 0;
+          totalScore += scores.labeling_agreement * 0.3; // 30% weight
+        }
+        
+        // Score based on original relevance score
+        if (rankingCriteria.includes('relevance_score')) {
+          scores.relevance_score = this.calculateBlockRelevance(block) / 100; // Normalize
+          totalScore += scores.relevance_score * 0.3; // 30% weight
+        }
+        
+        return {
+          ...block,
+          candidate_scores: scores,
+          total_score: totalScore
+        };
+      });
+      
+      // Sort by total score (descending)
+      scoredCandidates.sort((a, b) => b.total_score - a.total_score);
+      
+      // Take top K candidates
+      const topCandidates = scoredCandidates.slice(0, maxCandidates);
+      
+      console.log(`🏆 Ranked candidates: ${semanticBlocks.length} → top ${topCandidates.length} for Pass B`);
+      console.log(`📊 Top candidate scores: ${topCandidates.slice(0, 3).map(c => c.total_score.toFixed(2)).join(', ')}`);
+      
+      return {
+        success: true,
+        outputs: {
+          top_candidates: topCandidates,
+          candidate_scores: topCandidates.map(c => c.total_score),
+          ranking_criteria_used: rankingCriteria
+        },
+        cost: { tokens: 0, requests: 0 },
+        confidence: 0.85
+      };
+    } catch (error) {
+      return { success: false, error: error.message, cost: { tokens: 0, requests: 0 } };
+    }
+  }
+  
   async skillRankResults(params = {}) {
     const fieldMappings = this.context.get('field_mappings') || [];
     const mappingConfidence = this.context.get('mapping_confidence') || [];
@@ -622,6 +705,390 @@ class PlanExecutor {
     } catch (error) {
       return { success: false, error: error.message, cost: { tokens: 0, requests: 0 } };
     }
+  }
+  
+  // =============================================================================
+  // TWO-PASS PLAN EXECUTOR - Handles Pass A (skim) + Pass B (enrich) architecture
+  // =============================================================================
+  
+  /**
+   * Execute a two-pass plan with proper inter-pass data flow
+   */
+  async executeTwoPassPlan(plan, initialInputs = {}) {
+    console.log('🔄 Executing two-pass plan:', plan.task_id);
+    
+    // Initialize for two-pass execution
+    this.twoPassContext = new Map();
+    this.passResults = [];
+    
+    try {
+      // Execute Pass A (Skim)
+      console.log('🏃‍♂️ Starting Pass A (Skim)...');
+      const passAResult = await this.executePass(plan.passes[0], initialInputs);
+      
+      if (!passAResult.success) {
+        return this.createResult(false, null, `Pass A failed: ${passAResult.error}`);
+      }
+      
+      this.passResults.push(passAResult);
+      console.log(`✅ Pass A completed: ${passAResult.data?.length || 0} candidates selected`);
+      
+      // Pass data from A to B
+      const passBInputs = {
+        ...initialInputs,
+        top_candidates: passAResult.data,
+        candidate_scores: passAResult.context_final?.candidate_scores || []
+      };
+      
+      // Execute Pass B (Enrich)
+      console.log('🔧 Starting Pass B (Enrich)...');
+      const passBResult = await this.executePass(plan.passes[1], passBInputs);
+      
+      if (!passBResult.success) {
+        // Pass B failure is more serious - we lose enrichment
+        console.warn('⚠️ Pass B failed, returning Pass A results with warning');
+        return this.createResult(true, passAResult.data, `Pass B failed: ${passBResult.error}`);
+      }
+      
+      this.passResults.push(passBResult);
+      console.log(`✅ Pass B completed: ${passBResult.data?.length || 0} final results`);
+      
+      // Combine results and traces
+      const finalResult = this.combineTwoPassResults(passAResult, passBResult);
+      
+      return this.createResult(true, finalResult.data, null, {
+        passes: this.passResults,
+        pass_a_candidates: passAResult.data?.length || 0,
+        pass_b_results: passBResult.data?.length || 0,
+        efficiency_gain: this.calculateEfficiencyGain(passAResult, passBResult)
+      });
+      
+    } catch (error) {
+      this.logTrace('two_pass_error', { error: error.message });
+      return this.createResult(false, null, `Two-pass execution failed: ${error.message}`);
+    }
+  }
+  
+  /**
+   * Execute a single pass (A or B) as a sub-plan
+   */
+  async executePass(pass, inputs) {
+    console.log(`🎯 Executing ${pass.name}`);
+    
+    // Create a sub-executor for this pass
+    const passExecutor = new PlanExecutor();
+    
+    // Convert pass to standard plan format
+    const passPlan = {
+      task_id: `${pass.name.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}`,
+      budget: pass.budget,
+      steps: pass.steps,
+      constraints: {}
+    };
+    
+    // Execute the pass
+    const result = await passExecutor.executePlan(passPlan, inputs);
+    
+    // Extract the relevant output data based on pass type
+    if (pass.output === 'top_candidates') {
+      // Pass A: return top candidates
+      result.data = result.context_final?.top_candidates || 
+                    result.context_final?.semantic_blocks || [];
+    } else if (pass.output === 'final_results') {
+      // Pass B: return final mapped results  
+      result.data = result.context_final?.field_mappings || 
+                    result.context_final?.ranked_results || [];
+    }
+    
+    return result;
+  }
+  
+  /**
+   * Combine Pass A and Pass B results with metadata
+   */
+  combineTwoPassResults(passAResult, passBResult) {
+    const finalData = passBResult.data || [];
+    
+    // Add metadata about the two-pass process
+    const enrichedData = finalData.map(item => ({
+      ...item,
+      extraction_method: 'two_pass',
+      pass_a_score: item.total_score || null,
+      pass_b_confidence: item.confidence || null,
+      processing_passes: ['skim', 'enrich']
+    }));
+    
+    return {
+      data: enrichedData,
+      metadata: {
+        total_blocks_discovered: passAResult.context_final?.raw_block_count || 0,
+        candidates_selected: passAResult.data?.length || 0,
+        final_results: enrichedData.length,
+        pass_a_time: passAResult.execution_time,
+        pass_b_time: passBResult.execution_time,
+        total_time: passAResult.execution_time + passBResult.execution_time
+      }
+    };
+  }
+  
+  /**
+   * Calculate efficiency gain from two-pass approach
+   */
+  calculateEfficiencyGain(passAResult, passBResult) {
+    const blocksDiscovered = passAResult.context_final?.raw_block_count || 0;
+    const candidatesProcessed = passAResult.data?.length || 0;
+    const finalResults = passBResult.data?.length || 0;
+    
+    if (blocksDiscovered === 0) return 0;
+    
+    // Efficiency = avoided expensive processing on filtered blocks
+    const blocksFiltered = blocksDiscovered - candidatesProcessed;
+    const filteringEfficiency = candidatesProcessed > 0 ? blocksFiltered / blocksDiscovered : 0;
+    
+    return {
+      blocks_filtered: blocksFiltered,
+      filtering_efficiency: filteringEfficiency,
+      processing_reduction: `${(filteringEfficiency * 100).toFixed(1)}%`,
+      final_yield: candidatesProcessed > 0 ? finalResults / candidatesProcessed : 0
+    };
+  }
+  
+  // =============================================================================
+  // PHASE 2: WEAK SUPERVISION WITH LABELING FUNCTIONS
+  // Snorkel-style labeling functions for automatic block classification
+  // =============================================================================
+  
+  /**
+   * Weak supervision system using multiple labeling functions (LFs) 
+   * to classify semantic blocks without manual labeling
+   */
+  applyWeakSupervision(semanticBlocks) {
+    console.log('🏷️ Applying weak supervision to', semanticBlocks.length, 'blocks');
+    
+    const labeledBlocks = semanticBlocks.map(block => {
+      const labels = this.applyLabelingFunctions(block);
+      const softLabel = this.combineLabelVotes(labels);
+      
+      return {
+        ...block,
+        weak_labels: labels,
+        predicted_type: softLabel.type,
+        type_confidence: softLabel.confidence,
+        labeling_agreement: softLabel.agreement
+      };
+    });
+    
+    // Filter by predicted type and confidence
+    const profileBlocks = labeledBlocks.filter(block => 
+      block.predicted_type === 'profile_card' && 
+      block.type_confidence >= 0.6
+    );
+    
+    console.log(`🎯 Weak supervision filtered: ${semanticBlocks.length} → ${profileBlocks.length} profile candidates`);
+    console.log(`📊 Labeling agreement: ${profileBlocks.length > 0 ? (profileBlocks.reduce((sum, b) => sum + b.labeling_agreement, 0) / profileBlocks.length).toFixed(2) : 'N/A'}`);
+    
+    return profileBlocks;
+  }
+  
+  /**
+   * Apply all labeling functions to a semantic block
+   * Each LF votes on block type with confidence
+   */
+  applyLabelingFunctions(block) {
+    const labels = {};
+    
+    // LF1: heading_looks_like_name → profile_card
+    labels.LF1 = this.LF_heading_name_pattern(block);
+    
+    // LF2: sibling_has_role_words → profile_card
+    labels.LF2 = this.LF_role_word_density(block);
+    
+    // LF3: high_link_density → nav
+    labels.LF3 = this.LF_high_link_density(block);
+    
+    // LF4: short_comma_lines → board_list
+    labels.LF4 = this.LF_board_list_pattern(block);
+    
+    // LF5: paragraph_density → profile_card
+    labels.LF5 = this.LF_paragraph_density(block);
+    
+    // LF6: footer_keywords → footer
+    labels.LF6 = this.LF_footer_keywords(block);
+    
+    return labels;
+  }
+  
+  /**
+   * Combine label votes using weighted averaging
+   * Higher confidence LFs get more weight
+   */
+  combineLabelVotes(labels) {
+    const typeVotes = {};
+    const totalWeight = {};
+    
+    // Aggregate votes by type with confidence weighting
+    Object.values(labels).forEach(vote => {
+      if (vote.type !== 'abstain') {
+        typeVotes[vote.type] = (typeVotes[vote.type] || 0) + vote.confidence;
+        totalWeight[vote.type] = (totalWeight[vote.type] || 0) + 1;
+      }
+    });
+    
+    if (Object.keys(typeVotes).length === 0) {
+      return { type: 'other', confidence: 0.0, agreement: 0.0 };
+    }
+    
+    // Find winning type
+    const winner = Object.entries(typeVotes)
+      .sort(([,a], [,b]) => b - a)[0];
+    
+    const [winnerType, winnerScore] = winner;
+    const averageConfidence = winnerScore / totalWeight[winnerType];
+    
+    // Calculate agreement (fraction of LFs that agree with winner)
+    const totalVotes = Object.values(labels).filter(l => l.type !== 'abstain').length;
+    const agreementCount = Object.values(labels).filter(l => l.type === winnerType).length;
+    const agreement = totalVotes > 0 ? agreementCount / totalVotes : 0;
+    
+    return {
+      type: winnerType,
+      confidence: averageConfidence,
+      agreement: agreement
+    };
+  }
+  
+  // =============================================================================
+  // LABELING FUNCTIONS (LFs) - Individual classification rules
+  // =============================================================================
+  
+  /**
+   * LF1: Block heading looks like person name → profile_card
+   */
+  LF_heading_name_pattern(block) {
+    if (!block.heading) return { type: 'abstain', confidence: 0.0 };
+    
+    const heading = block.heading.trim();
+    
+    // Strong indicators of person name
+    const namePattern = /^[A-Z][a-z]+(?:\s+[A-Z][a-z.]+)*$/;
+    const hasNameStructure = namePattern.test(heading);
+    const wordCount = heading.split(/\s+/).length;
+    const hasReasonableLength = wordCount >= 2 && wordCount <= 4;
+    
+    if (hasNameStructure && hasReasonableLength) {
+      return { type: 'profile_card', confidence: 0.8 };
+    } else if (hasNameStructure || hasReasonableLength) {
+      return { type: 'profile_card', confidence: 0.5 };
+    }
+    
+    return { type: 'abstain', confidence: 0.0 };
+  }
+  
+  /**
+   * LF2: Block has role words nearby → profile_card
+   */
+  LF_role_word_density(block) {
+    const roleWords = [
+      'director', 'manager', 'executive', 'assistant', 'coordinator',
+      'specialist', 'officer', 'head', 'lead', 'chief', 'president',
+      'vice', 'senior', 'junior', 'associate', 'development'
+    ];
+    
+    const text = (block.block_text || '').toLowerCase();
+    const matchingWords = roleWords.filter(word => text.includes(word));
+    const density = matchingWords.length / Math.max(text.split(/\s+/).length, 1) * 100;
+    
+    if (density > 5) {
+      return { type: 'profile_card', confidence: 0.7 };
+    } else if (density > 2) {
+      return { type: 'profile_card', confidence: 0.5 };
+    }
+    
+    return { type: 'abstain', confidence: 0.0 };
+  }
+  
+  /**
+   * LF3: High link density → nav
+   */
+  LF_high_link_density(block) {
+    const linkDensity = block.link_density || 0;
+    
+    if (linkDensity > 0.15) {
+      return { type: 'nav', confidence: 0.8 };
+    } else if (linkDensity > 0.08) {
+      return { type: 'nav', confidence: 0.6 };
+    }
+    
+    return { type: 'abstain', confidence: 0.0 };
+  }
+  
+  /**
+   * LF4: Short comma-separated lines → board_list
+   */
+  LF_board_list_pattern(block) {
+    const text = block.block_text || '';
+    const lines = text.split('\n').filter(l => l.trim().length > 0);
+    
+    if (lines.length < 3) return { type: 'abstain', confidence: 0.0 };
+    
+    let shortLineCount = 0;
+    let commaLineCount = 0;
+    
+    lines.forEach(line => {
+      const trimmedLine = line.trim();
+      if (trimmedLine.length < 50) shortLineCount++;
+      if (trimmedLine.includes(',')) commaLineCount++;
+    });
+    
+    const shortRatio = shortLineCount / lines.length;
+    const commaRatio = commaLineCount / lines.length;
+    
+    // Board lists typically have many short lines with comma separation
+    if (shortRatio > 0.7 && commaRatio > 0.5) {
+      return { type: 'board_list', confidence: 0.8 };
+    } else if (shortRatio > 0.8) {
+      return { type: 'board_list', confidence: 0.6 };
+    }
+    
+    return { type: 'abstain', confidence: 0.0 };
+  }
+  
+  /**
+   * LF5: Good paragraph density → profile_card
+   */
+  LF_paragraph_density(block) {
+    const textDensity = block.text_density || 0;
+    const charCount = block.char_count || 0;
+    
+    // Profile cards have medium text density and reasonable length
+    if (textDensity > 10 && charCount > 150 && charCount < 800) {
+      return { type: 'profile_card', confidence: 0.6 };
+    } else if (textDensity > 5 && charCount > 100) {
+      return { type: 'profile_card', confidence: 0.4 };
+    }
+    
+    return { type: 'abstain', confidence: 0.0 };
+  }
+  
+  /**
+   * LF6: Footer keywords → footer
+   */
+  LF_footer_keywords(block) {
+    const footerKeywords = [
+      'copyright', '©', 'privacy policy', 'terms', 'contact',
+      'address', 'phone:', 'email:', 'follow us', 'social media'
+    ];
+    
+    const text = (block.block_text || '').toLowerCase();
+    const matchingKeywords = footerKeywords.filter(keyword => text.includes(keyword));
+    
+    if (matchingKeywords.length >= 2) {
+      return { type: 'footer', confidence: 0.8 };
+    } else if (matchingKeywords.length >= 1) {
+      return { type: 'footer', confidence: 0.5 };
+    }
+    
+    return { type: 'abstain', confidence: 0.0 };
   }
   
   // =============================================================================
@@ -1625,6 +2092,748 @@ class BasicPlanner {
 }
 
 /**
+ * Two-Pass Planner v0.1 - Implements Pass A (skim) + Pass B (enrich) architecture
+ * Optimizes for cost and speed by doing expensive operations only on filtered candidates
+ */
+class TwoPassPlanner extends BasicPlanner {
+  generatePlan(task) {
+    const { url, instructions, targetSchema, constraints = {} } = task;
+    
+    console.log('🎯 Generating two-pass plan for:', instructions);
+    
+    // Determine if two-pass optimization is beneficial
+    const shouldUseTwoPasses = this.shouldUseTwoPasses(constraints);
+    
+    if (!shouldUseTwoPasses) {
+      console.log('📋 Using single-pass plan (simple task)');
+      return super.generatePlan(task);
+    }
+    
+    console.log('📋 Using two-pass plan (Pass A: skim, Pass B: enrich)');
+    
+    // Create two-pass plan
+    const plan = {
+      task_id: `extract_2pass_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      budget: {
+        max_time: constraints.max_time || 20000, // More time for two passes
+        max_tokens: constraints.max_tokens || 800, // More tokens but controlled
+        max_requests: constraints.max_requests || 3
+      },
+      passes: [
+        this.createPassA(targetSchema, constraints),
+        this.createPassB(targetSchema, constraints)
+      ],
+      constraints: {
+        deterministic_order: true,
+        max_results: constraints.max_results || 10,
+        required_fields: this.getRequiredFields(targetSchema),
+        quality_threshold: constraints.quality_threshold || 0.3,
+        pass_a_candidates: Math.min(constraints.max_candidates || 15, 20) // Max candidates to pass to Pass B
+      }
+    };
+    
+    console.log(`📋 Generated two-pass plan: Pass A → top ${plan.constraints.pass_a_candidates} candidates → Pass B`);
+    
+    return plan;
+  }
+  
+  /**
+   * Pass A (Skim): Fast DOM-only block classification and candidate selection
+   * Only uses DOM processing, weak supervision, and basic filtering
+   */
+  createPassA(targetSchema, constraints) {
+    return {
+      name: "Pass A (Skim)",
+      description: "Fast candidate selection using DOM and weak supervision",
+      budget: {
+        max_time: 8000,   // 8 seconds for Pass A
+        max_tokens: 0,    // No LLM calls in Pass A
+        max_requests: 0   // No external requests
+      },
+      steps: [
+        {
+          skill: 'PreserveStructure',
+          params: { html_input: true }
+        },
+        {
+          skill: 'DiscoverBlocks',
+          params: { 
+            min_size: 50,
+            apply_weak_supervision: true,
+            max_candidates: constraints.max_candidates || 15
+          }
+        },
+        {
+          skill: 'DetectStructuredData',
+          params: {},
+          fallback: 'HarvestMeta'
+        },
+        // Pass A stops here - no expensive MapFields yet
+        {
+          skill: 'RankCandidates', // New skill for candidate ranking
+          params: {
+            ranking_criteria: ['type_confidence', 'labeling_agreement', 'relevance_score'],
+            max_candidates: constraints.max_candidates || 15
+          }
+        }
+      ],
+      output: 'top_candidates' // Output for Pass B
+    };
+  }
+  
+  /**
+   * Pass B (Enrich): Expensive operations only on filtered candidates
+   * Uses MapFields, validation, citations - but only on top K candidates
+   */
+  createPassB(targetSchema, constraints) {
+    return {
+      name: "Pass B (Enrich)",
+      description: "Detailed extraction on filtered candidates",
+      budget: {
+        max_time: 12000,  // 12 seconds for Pass B
+        max_tokens: 800,  // Allow LLM usage here
+        max_requests: 3   // External requests if needed
+      },
+      input: 'top_candidates', // Input from Pass A
+      steps: [
+        {
+          skill: 'MapFields',
+          params: {
+            confidence_threshold: 0.25, // Lower threshold since pre-filtered
+            candidates_only: true, // Only process candidates from Pass A
+            use_enhanced_extraction: true
+          }
+        },
+        {
+          skill: 'ValidateOutput',
+          params: { 
+            repair: true,
+            aggressive_repair: true // More repair attempts since fewer items
+          }
+        },
+        {
+          skill: 'CiteEvidence',
+          params: { 
+            detailed_citations: true // More detailed since fewer items
+          }
+        },
+        {
+          skill: 'RankResults',
+          params: {
+            tie_breaker: 'page_order_then_confidence',
+            apply_final_filtering: true
+          }
+        }
+      ],
+      output: 'final_results'
+    };
+  }
+  
+  /**
+   * Decide whether to use two-pass architecture based on task characteristics
+   */
+  shouldUseTwoPasses(constraints) {
+    // Use two-pass for larger or more complex tasks
+    const hasLargeExpectedResults = (constraints.max_results || 10) > 5;
+    const hasStrictQualityRequirements = (constraints.quality_threshold || 0.3) > 0.5;
+    const hasLimitedBudget = (constraints.max_tokens || 500) < 1000;
+    
+    // Two-pass is beneficial when we expect many candidates but want high quality
+    return hasLargeExpectedResults || hasStrictQualityRequirements || hasLimitedBudget;
+  }
+}
+
+/**
+ * Self-Play Planner v0.1 - Generates multiple plan variants and selects winner
+ * Uses evaluation score per unit cost to optimize plan selection
+ */
+class SelfPlayPlanner extends TwoPassPlanner {
+  async generateAndTestPlans(task, maxVariants = 3) {
+    console.log('🎮 Generating multiple plan variants for self-play optimization');
+    
+    const planVariants = this.generatePlanVariants(task, maxVariants);
+    const results = [];
+    
+    // Test each plan variant
+    for (let i = 0; i < planVariants.length; i++) {
+      const variant = planVariants[i];
+      console.log(`🧪 Testing plan variant ${i + 1}/${planVariants.length}: ${variant.description}`);
+      
+      try {
+        const result = await this.executePlanVariant(variant, task);
+        results.push({
+          plan: variant,
+          result: result,
+          score: this.calculateVariantScore(result, variant),
+          cost: this.calculateVariantCost(result, variant)
+        });
+      } catch (error) {
+        console.warn(`⚠️ Plan variant ${i + 1} failed:`, error.message);
+        results.push({
+          plan: variant,
+          result: { success: false, error: error.message },
+          score: 0,
+          cost: Infinity
+        });
+      }
+    }
+    
+    // Select winner by score/cost ratio
+    const winner = this.selectWinningPlan(results);
+    
+    console.log(`🏆 Winner: ${winner.plan.description} (score/cost: ${winner.efficiency.toFixed(2)})`);
+    
+    // Store losing variants for learning
+    const losers = results.filter(r => r !== winner);
+    this.storeLosingVariants(losers);
+    
+    return {
+      winner: winner,
+      all_results: results,
+      optimization_summary: this.createOptimizationSummary(results, winner)
+    };
+  }
+  
+  /**
+   * Generate multiple plan variants with different strategies
+   */
+  generatePlanVariants(task, maxVariants) {
+    const variants = [];
+    
+    // Variant 1: JSON-LD First (structured data priority)
+    variants.push({
+      id: 'json_ld_first',
+      description: 'JSON-LD First Strategy',
+      strategy: 'structured_data_priority',
+      plan: this.createJSONLDFirstPlan(task)
+    });
+    
+    // Variant 2: DOM First (always use DOM-based approach)
+    variants.push({
+      id: 'dom_first',
+      description: 'DOM First Strategy', 
+      strategy: 'dom_priority',
+      plan: this.createDOMFirstPlan(task)
+    });
+    
+    // Variant 3: Strict Validators (high quality, fewer results)
+    if (maxVariants >= 3) {
+      variants.push({
+        id: 'strict_quality',
+        description: 'Strict Quality Strategy',
+        strategy: 'quality_over_quantity',
+        plan: this.createStrictQualityPlan(task)
+      });
+    }
+    
+    return variants.slice(0, maxVariants);
+  }
+  
+  /**
+   * Create JSON-LD first variant (prioritizes structured data)
+   */
+  createJSONLDFirstPlan(task) {
+    const basePlan = super.generatePlan({
+      ...task,
+      constraints: {
+        ...task.constraints,
+        prefer_structured_data: true,
+        quality_threshold: 0.4
+      }
+    });
+    
+    // Modify to prioritize structured data extraction
+    if (basePlan.passes) {
+      basePlan.passes[0].steps = [
+        { skill: 'PreserveStructure', params: { html_input: true } },
+        { skill: 'DetectStructuredData', params: { exhaustive_search: true } },
+        { skill: 'HarvestMeta', params: { detailed_extraction: true } },
+        { skill: 'DiscoverBlocks', params: { min_size: 75, structured_data_hints: true } },
+        { skill: 'RankCandidates', params: { prefer_structured: true } }
+      ];
+    }
+    
+    return basePlan;
+  }
+  
+  /**
+   * Create DOM first variant (always uses DOM processing heavily)
+   */
+  createDOMFirstPlan(task) {
+    const basePlan = super.generatePlan({
+      ...task,
+      constraints: {
+        ...task.constraints,
+        force_dom_processing: true,
+        quality_threshold: 0.35
+      }
+    });
+    
+    // Always use two-pass for DOM first
+    if (!basePlan.passes) {
+      // Convert single-pass to two-pass
+      const twoPassPlan = this.convertToTwoPass(basePlan, task.constraints);
+      return twoPassPlan;
+    }
+    
+    return basePlan;
+  }
+  
+  /**
+   * Create strict quality variant (fewer but higher quality results)
+   */
+  createStrictQualityPlan(task) {
+    return super.generatePlan({
+      ...task,
+      constraints: {
+        ...task.constraints,
+        quality_threshold: 0.7, // Higher threshold
+        max_results: Math.min(task.constraints?.max_results || 10, 5), // Fewer results
+        aggressive_filtering: true
+      }
+    });
+  }
+  
+  /**
+   * Execute a plan variant for testing
+   */
+  async executePlanVariant(variant, originalTask) {
+    const executor = new PlanExecutor();
+    const initialInputs = {
+      html: originalTask.html,
+      target_schema: originalTask.targetSchema
+    };
+    
+    if (variant.plan.passes) {
+      return await executor.executeTwoPassPlan(variant.plan, initialInputs);
+    } else {
+      return await executor.executePlan(variant.plan, initialInputs);
+    }
+  }
+  
+  /**
+   * Calculate variant score using evaluator
+   */
+  calculateVariantScore(result, variant) {
+    if (!result.success) return 0;
+    
+    const evaluator = new SimpleEvaluator();
+    const evaluation = evaluator.evaluate(result, result.context_final?.target_schema);
+    
+    return evaluation.overall_score;
+  }
+  
+  /**
+   * Calculate variant cost (time + tokens + requests)
+   */
+  calculateVariantCost(result, variant) {
+    if (!result.success) return Infinity;
+    
+    const timeCost = (result.execution_time || 0) / 1000; // Seconds
+    const tokenCost = (result.budget_used?.tokens || 0) / 100; // Per 100 tokens
+    const requestCost = (result.budget_used?.requests || 0) * 2; // Per request
+    
+    return timeCost + tokenCost + requestCost;
+  }
+  
+  /**
+   * Select winning plan by score/cost efficiency
+   */
+  selectWinningPlan(results) {
+    const successfulResults = results.filter(r => r.result.success && r.cost > 0);
+    
+    if (successfulResults.length === 0) {
+      // All failed, return least bad
+      return results.reduce((best, current) => 
+        current.score > best.score ? current : best
+      );
+    }
+    
+    // Calculate efficiency (score per unit cost)
+    const rankedResults = successfulResults.map(r => ({
+      ...r,
+      efficiency: r.score / Math.max(r.cost, 0.1) // Avoid division by zero
+    }));
+    
+    rankedResults.sort((a, b) => b.efficiency - a.efficiency);
+    
+    return rankedResults[0];
+  }
+  
+  /**
+   * Store losing variants for future learning
+   */
+  storeLosingVariants(losers) {
+    // In a real system, this would update training data
+    console.log('📚 Storing losing variants for learning:', losers.map(l => ({
+      strategy: l.plan.strategy,
+      score: l.score,
+      cost: l.cost,
+      failure_reason: l.result.error || 'low_efficiency'
+    })));
+  }
+  
+  /**
+   * Create optimization summary
+   */
+  createOptimizationSummary(results, winner) {
+    const successCount = results.filter(r => r.result.success).length;
+    const avgScore = results.reduce((sum, r) => sum + r.score, 0) / results.length;
+    const avgCost = results.filter(r => r.cost < Infinity).reduce((sum, r) => sum + r.cost, 0) / 
+                    results.filter(r => r.cost < Infinity).length;
+    
+    return {
+      total_variants: results.length,
+      successful_variants: successCount,
+      success_rate: successCount / results.length,
+      average_score: avgScore,
+      average_cost: avgCost,
+      winner_strategy: winner.plan.strategy,
+      winner_efficiency: winner.efficiency || 0,
+      improvement_over_average: winner.score - avgScore
+    };
+  }
+  
+  /**
+   * Convert single-pass plan to two-pass
+   */
+  convertToTwoPass(singlePassPlan, constraints) {
+    // Create a two-pass version of a single-pass plan
+    const task = { 
+      constraints: { ...constraints, force_two_pass: true } 
+    };
+    
+    return {
+      ...singlePassPlan,
+      task_id: `2pass_${singlePassPlan.task_id}`,
+      passes: [
+        this.createPassA(null, constraints),
+        this.createPassB(null, constraints)
+      ]
+    };
+  }
+}
+
+/**
+ * Active Learning Queue v0.1 - Identifies and queues disagreement cases
+ * Focuses on cases where labeling functions disagree or confidence is borderline
+ */
+class ActiveLearningQueue {
+  constructor() {
+    this.disagreementQueue = [];
+    this.confidenceQueue = [];
+    this.retrainingQueue = [];
+    this.maxQueueSize = 100;
+  }
+  
+  /**
+   * Analyze extraction results and identify learning opportunities
+   */
+  analyzeForLearning(executionResult, semanticBlocks, evaluationResult) {
+    console.log('🎓 Analyzing results for active learning opportunities');
+    
+    const learningCases = {
+      disagreements: this.findDisagreementCases(semanticBlocks),
+      confidence_borderline: this.findBorderlineCases(executionResult.data),
+      validation_failures: this.findValidationFailures(executionResult.trace),
+      quality_mismatches: this.findQualityMismatches(executionResult, evaluationResult)
+    };
+    
+    // Queue the most valuable cases for human review
+    this.queueLearningCases(learningCases);
+    
+    const totalCases = Object.values(learningCases).reduce((sum, cases) => sum + cases.length, 0);
+    console.log(`📚 Found ${totalCases} potential learning cases`);
+    
+    return {
+      learning_opportunities: learningCases,
+      queue_status: this.getQueueStatus(),
+      priority_cases: this.getPriorityCases(),
+      learning_value_score: this.calculateLearningValue(learningCases)
+    };
+  }
+  
+  /**
+   * Find cases where labeling functions strongly disagree
+   */
+  findDisagreementCases(semanticBlocks) {
+    const disagreements = [];
+    
+    for (const block of semanticBlocks) {
+      if (!block.weak_labels) continue;
+      
+      const votes = Object.values(block.weak_labels);
+      const nonAbstain = votes.filter(v => v.type !== 'abstain');
+      
+      if (nonAbstain.length < 2) continue; // Need multiple votes to have disagreement
+      
+      // Check for type disagreement
+      const uniqueTypes = [...new Set(nonAbstain.map(v => v.type))];
+      if (uniqueTypes.length > 1) {
+        const disagreementStrength = this.calculateDisagreementStrength(votes);
+        
+        disagreements.push({
+          type: 'labeling_function_disagreement',
+          block_id: block.root_selector,
+          block_heading: block.heading,
+          block_text_preview: block.block_text?.substring(0, 200) + '...',
+          conflicting_labels: uniqueTypes,
+          disagreement_strength: disagreementStrength,
+          labeling_agreement: block.labeling_agreement,
+          predicted_type: block.predicted_type,
+          weak_labels: block.weak_labels,
+          learning_priority: disagreementStrength > 0.5 ? 'high' : 'medium'
+        });
+      }
+    }
+    
+    return disagreements.sort((a, b) => b.disagreement_strength - a.disagreement_strength);
+  }
+  
+  /**
+   * Find cases with borderline confidence scores
+   */
+  findBorderlineCases(extractedData) {
+    const borderlineCases = [];
+    const confidenceThresholds = { low: 0.4, high: 0.6 }; // Borderline zone
+    
+    for (const item of extractedData || []) {
+      const confidence = item.confidence || 0;
+      
+      if (confidence >= confidenceThresholds.low && confidence <= confidenceThresholds.high) {
+        borderlineCases.push({
+          type: 'borderline_confidence',
+          item_data: item,
+          confidence_score: confidence,
+          field_confidences: item.field_confidences || {},
+          missing_fields: this.findMissingFields(item),
+          quality_concerns: this.identifyQualityConcerns(item),
+          learning_priority: confidence < 0.5 ? 'high' : 'medium'
+        });
+      }
+    }
+    
+    return borderlineCases.sort((a, b) => Math.abs(0.5 - a.confidence_score) - Math.abs(0.5 - b.confidence_score));
+  }
+  
+  /**
+   * Find validation failures that suggest learning opportunities
+   */
+  findValidationFailures(trace) {
+    const failures = [];
+    
+    for (const traceItem of trace || []) {
+      if (traceItem.event === 'step_failed' && traceItem.data?.skill === 'ValidateOutput') {
+        failures.push({
+          type: 'validation_failure',
+          skill: traceItem.data.skill,
+          error: traceItem.data.error,
+          timestamp: traceItem.timestamp,
+          context: traceItem.context_keys,
+          learning_priority: 'high' // Validation failures are high priority
+        });
+      }
+      
+      // Look for repair attempts
+      if (traceItem.event === 'step_start' && traceItem.data?.params?.repair) {
+        failures.push({
+          type: 'repair_attempt',
+          skill: traceItem.data.skill,
+          repair_params: traceItem.data.params,
+          timestamp: traceItem.timestamp,
+          learning_priority: 'medium'
+        });
+      }
+    }
+    
+    return failures;
+  }
+  
+  /**
+   * Find cases where evaluator score doesn't match expectation
+   */
+  findQualityMismatches(executionResult, evaluationResult) {
+    const mismatches = [];
+    
+    if (!evaluationResult) return mismatches;
+    
+    const score = evaluationResult.overall_score;
+    const dataCount = (executionResult.data || []).length;
+    
+    // High data count but low score = quality issues
+    if (dataCount > 5 && score < 0.4) {
+      mismatches.push({
+        type: 'high_quantity_low_quality',
+        data_count: dataCount,
+        quality_score: score,
+        quality_issues: evaluationResult.issues || [],
+        evaluation_metrics: evaluationResult.metrics || {},
+        learning_priority: 'high'
+      });
+    }
+    
+    // Low data count but high confidence = missing items?
+    if (dataCount < 3 && score > 0.7) {
+      mismatches.push({
+        type: 'low_quantity_high_confidence',
+        data_count: dataCount,
+        quality_score: score,
+        potential_missed_items: true,
+        learning_priority: 'medium'
+      });
+    }
+    
+    return mismatches;
+  }
+  
+  /**
+   * Queue learning cases by priority and type
+   */
+  queueLearningCases(learningCases) {
+    // Add disagreements to disagreement queue
+    for (const disagreement of learningCases.disagreements || []) {
+      this.addToQueue(this.disagreementQueue, disagreement);
+    }
+    
+    // Add borderline cases to confidence queue
+    for (const borderline of learningCases.confidence_borderline || []) {
+      this.addToQueue(this.confidenceQueue, borderline);
+    }
+    
+    // Add validation failures and quality mismatches to retraining queue
+    const retrainingCases = [
+      ...(learningCases.validation_failures || []),
+      ...(learningCases.quality_mismatches || [])
+    ];
+    
+    for (const retraining of retrainingCases) {
+      this.addToQueue(this.retrainingQueue, retraining);
+    }
+  }
+  
+  /**
+   * Add item to queue with size management
+   */
+  addToQueue(queue, item) {
+    // Add with timestamp
+    const queueItem = {
+      ...item,
+      queued_at: new Date().toISOString(),
+      queue_id: `${item.type}_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`
+    };
+    
+    queue.push(queueItem);
+    
+    // Maintain queue size
+    if (queue.length > this.maxQueueSize) {
+      queue.shift(); // Remove oldest item
+    }
+  }
+  
+  /**
+   * Calculate disagreement strength between labeling function votes
+   */
+  calculateDisagreementStrength(votes) {
+    const nonAbstain = votes.filter(v => v.type !== 'abstain');
+    if (nonAbstain.length < 2) return 0;
+    
+    const types = nonAbstain.map(v => v.type);
+    const uniqueTypes = [...new Set(types)];
+    
+    // More unique types = more disagreement
+    const typeDisagreement = (uniqueTypes.length - 1) / (types.length - 1);
+    
+    // Also consider confidence spread
+    const confidences = nonAbstain.map(v => v.confidence);
+    const confidenceSpread = Math.max(...confidences) - Math.min(...confidences);
+    
+    return (typeDisagreement * 0.7) + (confidenceSpread * 0.3);
+  }
+  
+  /**
+   * Get current queue status
+   */
+  getQueueStatus() {
+    return {
+      disagreement_queue: this.disagreementQueue.length,
+      confidence_queue: this.confidenceQueue.length,
+      retraining_queue: this.retrainingQueue.length,
+      total_queued: this.disagreementQueue.length + this.confidenceQueue.length + this.retrainingQueue.length,
+      capacity_used: Math.min(1.0, (this.disagreementQueue.length + this.confidenceQueue.length + this.retrainingQueue.length) / (this.maxQueueSize * 3))
+    };
+  }
+  
+  /**
+   * Get highest priority cases across all queues
+   */
+  getPriorityCases(limit = 5) {
+    const allCases = [
+      ...this.disagreementQueue,
+      ...this.confidenceQueue,
+      ...this.retrainingQueue
+    ];
+    
+    // Sort by priority (high > medium > low) and then by queue time
+    const priorityOrder = { high: 3, medium: 2, low: 1 };
+    
+    allCases.sort((a, b) => {
+      const priorityDiff = priorityOrder[b.learning_priority] - priorityOrder[a.learning_priority];
+      if (priorityDiff !== 0) return priorityDiff;
+      
+      // Same priority, sort by queue time (older first)
+      return new Date(a.queued_at) - new Date(b.queued_at);
+    });
+    
+    return allCases.slice(0, limit);
+  }
+  
+  /**
+   * Calculate overall learning value of the queued cases
+   */
+  calculateLearningValue(learningCases) {
+    const weights = {
+      disagreements: 0.4,
+      confidence_borderline: 0.3,
+      validation_failures: 0.2,
+      quality_mismatches: 0.1
+    };
+    
+    let totalValue = 0;
+    Object.entries(learningCases).forEach(([type, cases]) => {
+      const weight = weights[type] || 0.1;
+      const highPriority = cases.filter(c => c.learning_priority === 'high').length;
+      const mediumPriority = cases.filter(c => c.learning_priority === 'medium').length;
+      
+      totalValue += weight * (highPriority * 1.0 + mediumPriority * 0.5);
+    });
+    
+    return Math.min(1.0, totalValue); // Cap at 1.0
+  }
+  
+  /**
+   * Helper: Find missing fields in extracted item
+   */
+  findMissingFields(item) {
+    const requiredFields = ['name', 'title', 'bio']; // Common required fields
+    return requiredFields.filter(field => !item[field] || item[field].length < 2);
+  }
+  
+  /**
+   * Helper: Identify quality concerns in extracted item
+   */
+  identifyQualityConcerns(item) {
+    const concerns = [];
+    
+    if (item.name && item.name.length < 5) concerns.push('name_too_short');
+    if (item.title && item.title.includes('Staff')) concerns.push('title_contamination');
+    if (item.bio && item.bio.length < 50) concerns.push('bio_too_short');
+    if (item.name && /\d/.test(item.name)) concerns.push('name_contains_numbers');
+    
+    return concerns;
+  }
+}
+
+/**
  * Simple Evaluator v0.1 - Scores extraction results for learning
  */
 class SimpleEvaluator {
@@ -1813,18 +3022,25 @@ async function processWithPlanBasedSystem(content, params) {
       }
     };
     
-    // Generate plan
-    const planner = new BasicPlanner();
+    // Generate plan using Two-Pass Planner (falls back to single-pass if appropriate)
+    const planner = new TwoPassPlanner();
     const plan = planner.generatePlan(task);
     
-    // Execute plan
+    // Execute plan (single-pass or two-pass)
     const executor = new PlanExecutor();
     const initialInputs = {
       html: content, // Raw HTML content
       target_schema: params.outputSchema
     };
     
-    const executionResult = await executor.executePlan(plan, initialInputs);
+    let executionResult;
+    if (plan.passes) {
+      // Two-pass plan execution
+      executionResult = await executor.executeTwoPassPlan(plan, initialInputs);
+    } else {
+      // Single-pass plan execution  
+      executionResult = await executor.executePlan(plan, initialInputs);
+    }
     
     if (!executionResult.success) {
       throw new Error(`Plan execution failed: ${executionResult.error}`);
@@ -1834,19 +3050,35 @@ async function processWithPlanBasedSystem(content, params) {
     const evaluator = new SimpleEvaluator();
     const evaluation = evaluator.evaluate(executionResult, params.outputSchema);
     
+    // Active learning analysis
+    const activeLearning = new ActiveLearningQueue();
+    const semanticBlocks = executionResult.context_final?.semantic_blocks || [];
+    const learningAnalysis = activeLearning.analyzeForLearning(executionResult, semanticBlocks, evaluation);
+    
     console.log(`✅ Plan-based extraction completed with score: ${evaluation.overall_score.toFixed(2)}`);
+    console.log(`🎓 Learning value: ${learningAnalysis.learning_value_score.toFixed(2)} (${learningAnalysis.queue_status.total_queued} cases queued)`);
     
     return {
       success: true,
       data: executionResult.data,
       metadata: {
-        strategy: 'plan_based_extraction',
+        strategy: plan.passes ? 'two_pass_extraction' : 'plan_based_extraction',
         plan_id: plan.task_id,
-        skills_used: plan.steps.map(step => step.skill),
+        skills_used: plan.passes 
+          ? plan.passes.flatMap(pass => pass.steps.map(step => step.skill))
+          : plan.steps.map(step => step.skill),
         execution_time: executionResult.execution_time,
         budget_used: executionResult.budget_used,
         evaluation: evaluation,
-        trace: executionResult.trace
+        trace: executionResult.trace,
+        // Two-pass specific metadata
+        ...(plan.passes && executionResult.passes && {
+          pass_a_candidates: executionResult.pass_a_candidates,
+          pass_b_results: executionResult.pass_b_results,
+          efficiency_gain: executionResult.efficiency_gain
+        }),
+        // Active learning metadata
+        learning_analysis: learningAnalysis
       }
     };
     
