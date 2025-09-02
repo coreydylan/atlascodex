@@ -1,6 +1,7 @@
 // Atlas Codex API Lambda Handler
 const { DynamoDBClient, PutItemCommand, GetItemCommand, ScanCommand } = require('@aws-sdk/client-dynamodb');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
+const { processNaturalLanguage } = require('./ai-processor');
 
 const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const sqs = new SQSClient({ region: process.env.AWS_REGION || 'us-west-2' });
@@ -179,6 +180,60 @@ exports.handler = async (event) => {
       return await handleHealth();
     }
 
+    // AI Processing endpoint
+    if (path === '/api/ai/process' || path === '/dev/api/ai/process') {
+      if (method === 'POST') {
+        try {
+          const params = JSON.parse(body);
+          const result = await processNaturalLanguage(params.prompt || params.input, {
+            apiKey: params.apiKey || headers['x-openai-key'] || process.env.OPENAI_API_KEY
+          });
+          
+          // Optionally auto-create the extraction job
+          if (params.autoExecute !== false) {
+            // Create the extraction job with the AI-generated params
+            const jobId = generateJobId(result.type || 'extract');
+            const job = {
+              id: { S: jobId },
+              type: { S: result.type || 'extract' },
+              status: { S: 'pending' },
+              url: { S: result.url },
+              params: { S: JSON.stringify({ ...result.params, formats: result.formats }) },
+              createdAt: { N: Date.now().toString() },
+              updatedAt: { N: Date.now().toString() },
+              aiGenerated: { BOOL: true }
+            };
+            
+            await dynamodb.send(new PutItemCommand({
+              TableName: 'atlas-codex-jobs',
+              Item: job
+            }));
+            
+            await sqs.send(new SendMessageCommand({
+              QueueUrl: process.env.QUEUE_URL,
+              MessageBody: JSON.stringify({
+                jobId,
+                type: result.type || 'extract',
+                params: { ...result.params, url: result.url, formats: result.formats }
+              })
+            }));
+            
+            result.jobId = jobId;
+            result.message = 'Job created and queued for processing';
+          }
+          
+          return createResponse(200, result);
+        } catch (error) {
+          console.error('AI processing failed:', error);
+          return createResponse(400, { 
+            error: 'AI Processing Error', 
+            message: error.message 
+          });
+        }
+      }
+      return createResponse(405, { error: 'Method Not Allowed' });
+    }
+    
     // Extract endpoints
     if (path.includes('/api/extract')) {
       // Extract jobId from path manually since pathParameters might not work with proxy+

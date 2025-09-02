@@ -156,6 +156,8 @@ function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [showResult, setShowResult] = useState(false);
+  const [aiMode, setAiMode] = useState(false);
+  const [aiProcessing, setAiProcessing] = useState(false);
   
   // Options state - always visible
   const [includeHtml, setIncludeHtml] = useState(true);
@@ -213,6 +215,53 @@ function App() {
     if (!url) return;
     
     setLoading(true);
+    
+    // If AI mode is enabled, process with AI first
+    if (aiMode) {
+      setAiProcessing(true);
+      try {
+        const aiResponse = await fetch(`${API_BASE}/api/ai/process`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123',
+          },
+          body: JSON.stringify({
+            prompt: url,
+            autoExecute: true
+          })
+        });
+        
+        if (aiResponse.ok) {
+          const aiResult = await aiResponse.json();
+          console.log('AI Processing Result:', aiResult);
+          
+          if (aiResult.jobId) {
+            const newJob: Job = {
+              id: aiResult.jobId,
+              url: aiResult.url,
+              mode: aiResult.type as Mode || 'scrape',
+              format: aiResult.formats?.[0] as Format || 'markdown',
+              status: 'running',
+              startedAt: new Date().toISOString(),
+              options: aiResult.params
+            };
+            
+            setJobs([newJob, ...jobs]);
+            setActiveJob(newJob);
+            pollJobStatus(aiResult.jobId, newJob.id);
+            setShowResult(true);
+            setAiProcessing(false);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('AI processing failed:', error);
+      }
+      setAiProcessing(false);
+    }
+    
     const fullUrl = url.startsWith('http') ? url : `https://${url}`;
     
     const newJob: Job = {
@@ -540,13 +589,28 @@ function App() {
               {/* URL Input */}
               <Card>
                 <CardContent className="p-6">
-                  <Label htmlFor="url" className="text-sm font-medium mb-2 block">
-                    URL to {mode}
-                  </Label>
+                  <div className="flex justify-between items-center mb-2">
+                    <Label htmlFor="url" className="text-sm font-medium">
+                      {aiMode ? 'Describe what you want' : `URL to ${mode}`}
+                    </Label>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="ai-mode" className="text-xs text-gray-500">
+                        AI Mode
+                      </Label>
+                      <Switch
+                        id="ai-mode"
+                        checked={aiMode}
+                        onCheckedChange={setAiMode}
+                      />
+                    </div>
+                  </div>
                   <div className="flex gap-2">
                     <Input
                       id="url"
-                      placeholder="Enter URL or natural language (e.g., 'scrape nytimes.com as markdown' or 'search for AI on example.com')"
+                      placeholder={aiMode 
+                        ? "e.g., 'Get all product prices from amazon bestsellers' or 'Find AI news on techcrunch and summarize'"
+                        : "Enter URL or natural language (e.g., 'scrape nytimes.com as markdown')"
+                      }
                       value={url}
                       onChange={(e) => setUrl(e.target.value)}
                       className="flex-1"
@@ -564,10 +628,10 @@ function App() {
                       {loading ? (
                         <>
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Processing
+                          {aiProcessing ? 'AI Processing' : 'Processing'}
                         </>
                       ) : (
-                        config.action
+                        aiMode ? 'AI Extract' : config.action
                       )}
                     </Button>
                   </div>
