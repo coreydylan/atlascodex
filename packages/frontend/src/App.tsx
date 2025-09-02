@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import ExtractorUI from './ExtractorUI';
 
 /* Tailwind Classes Used:
 bg-orange-500 text-white bg-gray-100 text-gray-700 hover:bg-gray-200
@@ -149,6 +150,7 @@ function parseNaturalLanguage(input: string): { url?: string; mode?: Mode; forma
 }
 
 function App() {
+  const [useExtractorUI, setUseExtractorUI] = useState(false);
   const [mode, setMode] = useState<Mode>('scrape');
   const [url, setUrl] = useState('');
   const [format, setFormat] = useState<Format>('markdown');
@@ -602,6 +604,25 @@ function App() {
 
   const config = getModeConfig(mode);
 
+  // Render the new ExtractorUI if enabled
+  if (useExtractorUI) {
+    return (
+      <div className="min-h-screen bg-white">
+        {/* Toggle Button */}
+        <div className="fixed top-4 right-4 z-50">
+          <Button
+            onClick={() => setUseExtractorUI(false)}
+            variant="outline"
+            className="bg-white shadow-lg"
+          >
+            Switch to Classic UI
+          </Button>
+        </div>
+        <ExtractorUI />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-white">
       {/* Header */}
@@ -609,6 +630,14 @@ function App() {
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-semibold">Atlas Codex</h1>
+            <Button
+              onClick={() => setUseExtractorUI(true)}
+              variant="outline"
+              className="bg-gradient-to-r from-orange-500 to-orange-600 text-white border-0 hover:from-orange-600 hover:to-orange-700"
+            >
+              <Sparkles className="w-4 h-4 mr-2" />
+              Try Structured Extraction
+            </Button>
             <Badge variant="outline">API Connected</Badge>
           </div>
         </div>
