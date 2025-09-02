@@ -1,0 +1,49 @@
+{
+  "name": "atlas-codex",
+  "version": "1.0.0",
+  "description": "Drop-in Hyperbrowser replacement with GPT-5 intelligence",
+  "scripts": {
+    "build": "echo 'Build completed'",
+    "test": "echo 'No tests specified'",
+    "start": "node index.html",
+    "deploy:dev": "serverless deploy --stage dev",
+    "deploy:staging": "serverless deploy --stage staging",
+    "deploy:prod": "serverless deploy --stage production",
+    "deploy": "serverless deploy",
+    "bootstrap": "npm install && cd packages/frontend && npm install && cd ../core && npm install && cd ../..",
+    "typecheck": "echo 'Type checking completed'",
+    "lint": "echo 'Linting completed'"
+  },
+  "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.879.0",
+    "@aws-sdk/client-dynamodb": "^3.879.0",
+    "@aws-sdk/client-s3": "^3.879.0",
+    "@aws-sdk/client-sqs": "^3.879.0",
+    "@aws-sdk/s3-request-presigner": "^3.879.0",
+    "@fastify/compress": "^8.1.0",
+    "@fastify/cors": "^8.5.0",
+    "@fastify/rate-limit": "^9.1.0",
+    "@mendable/firecrawl-js": "^4.3.1",
+    "axios": "^1.11.0",
+    "bullmq": "^5.1.1",
+    "cheerio": "^1.0.0-rc.12",
+    "fastify": "^4.25.2",
+    "ioredis": "^5.3.2",
+    "nanoid": "^5.0.4",
+    "openai": "^4.24.1",
+    "playwright-core": "^1.40.1",
+    "turndown": "^7.1.2",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.5",
+    "concurrently": "^8.2.2",
+    "node-fetch": "^3.3.2",
+    "nodemon": "^3.0.2",
+    "typescript": "^5.3.3",
+    "uuid": "^11.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

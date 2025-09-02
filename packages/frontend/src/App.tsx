@@ -1,0 +1,733 @@
+import React, { useState, useEffect, useRef } from 'react';
+
+/* Tailwind Classes Used:
+bg-orange-500 text-white bg-gray-100 text-gray-700 hover:bg-gray-200
+bg-orange-100 text-orange-600 border-orange-300 bg-gray-50 border-gray-200
+hover:bg-gray-100 bg-orange-50 border-orange-200 hover:bg-gray-50
+bg-white text-gray-900 text-gray-600 min-h-screen border-b
+text-2xl font-semibold text-sm font-medium
+*/
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  ChevronDown,
+  Code,
+  Copy,
+  Download,
+  FileText,
+  Globe,
+  Grid3x3,
+  Loader2,
+  Map,
+  Search,
+  X,
+  CheckCircle,
+  Clock,
+  AlertCircle,
+  ExternalLink,
+  FileJson,
+  Image,
+  Link2,
+  ListTree,
+  Sparkles,
+  FileCode,
+} from 'lucide-react';
+
+const API_BASE = process.env.REACT_APP_API_URL || 'https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev';
+
+type Mode = 'scrape' | 'search' | 'map' | 'crawl';
+type Format = 'markdown' | 'html' | 'json' | 'links' | 'screenshot' | 'summary';
+
+interface Job {
+  id: string;
+  url: string;
+  mode: Mode;
+  format: Format;
+  status: 'running' | 'success' | 'error';
+  startedAt: string;
+  completedAt?: string;
+  result?: any;
+  error?: string;
+  options?: any;
+}
+
+function App() {
+  const [mode, setMode] = useState<Mode>('scrape');
+  const [url, setUrl] = useState('');
+  const [format, setFormat] = useState<Format>('markdown');
+  const [loading, setLoading] = useState(false);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [activeJob, setActiveJob] = useState<Job | null>(null);
+  const [showResult, setShowResult] = useState(false);
+  
+  // Options state - always visible
+  const [includeHtml, setIncludeHtml] = useState(true);
+  const [onlyMainContent, setOnlyMainContent] = useState(true);
+  const [includeLinks, setIncludeLinks] = useState(false);
+  const [waitForSelector, setWaitForSelector] = useState('');
+  const [includeSubdomains, setIncludeSubdomains] = useState(false);
+  const [maxCrawlDepth, setMaxCrawlDepth] = useState(3);
+  const [limit, setLimit] = useState(10);
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  const formatOptions: { value: Format; label: string; icon: React.ReactNode }[] = [
+    { value: 'markdown', label: 'Markdown', icon: <FileText className="w-4 h-4" /> },
+    { value: 'html', label: 'HTML', icon: <FileCode className="w-4 h-4" /> },
+    { value: 'json', label: 'JSON', icon: <FileJson className="w-4 h-4" /> },
+    { value: 'links', label: 'Links', icon: <Link2 className="w-4 h-4" /> },
+    { value: 'screenshot', label: 'Screenshot', icon: <Image className="w-4 h-4" /> },
+    { value: 'summary', label: 'Summary', icon: <Sparkles className="w-4 h-4" /> },
+  ];
+
+  const getModeConfig = (mode: Mode) => {
+    switch (mode) {
+      case 'scrape':
+        return {
+          icon: <Grid3x3 className="w-4 h-4" />,
+          label: 'Scrape',
+          action: 'Start scraping',
+          description: 'Extract content from a single page',
+        };
+      case 'search':
+        return {
+          icon: <Search className="w-4 h-4" />,
+          label: 'Search',
+          action: 'Start searching',
+          description: 'Search for specific content',
+        };
+      case 'map':
+        return {
+          icon: <Map className="w-4 h-4" />,
+          label: 'Map',
+          action: 'Start mapping',
+          description: 'Generate a sitemap of all URLs',
+        };
+      case 'crawl':
+        return {
+          icon: <ListTree className="w-4 h-4" />,
+          label: 'Crawl',
+          action: 'Start crawling',
+          description: 'Crawl entire website',
+        };
+    }
+  };
+
+  const handleStart = async () => {
+    if (!url) return;
+    
+    setLoading(true);
+    const fullUrl = url.startsWith('http') ? url : `https://${url}`;
+    
+    const newJob: Job = {
+      id: `job_${Date.now()}`,
+      url: fullUrl,
+      mode,
+      format,
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      options: {
+        includeHtml,
+        onlyMainContent,
+        includeLinks,
+        waitForSelector,
+        includeSubdomains,
+        maxCrawlDepth,
+        limit,
+        searchQuery,
+      },
+    };
+    
+    setJobs([newJob, ...jobs]);
+    setActiveJob(newJob);
+    
+    try {
+      // Use extract endpoint for all modes initially
+      const endpoint = '/api/extract';
+      
+      const requestBody: any = {
+        url: fullUrl,
+        strategy: 'auto' // Let DIP system choose the best strategy
+      };
+      
+      // Add format-specific options
+      if (format === 'markdown') {
+        requestBody.includeMarkdown = true;
+      } else if (format === 'html') {
+        requestBody.includeHtml = true;
+      } else if (format === 'links') {
+        requestBody.includeLinks = true;
+      } else if (format === 'screenshot') {
+        requestBody.includeScreenshot = true;
+      } else if (format === 'json') {
+        requestBody.includeStructured = true;
+      }
+      
+      // Add mode-specific options
+      if (mode === 'crawl') {
+        requestBody.maxPages = limit || 10;
+        requestBody.includeSubdomains = includeSubdomains;
+        requestBody.maxDepth = maxCrawlDepth;
+      } else if (mode === 'search') {
+        requestBody.searchQuery = searchQuery;
+      }
+      
+      console.log('Sending extraction request:', requestBody);
+      
+      const response = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123',
+        },
+        body: JSON.stringify(requestBody),
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API Error:', response.status, errorText);
+        throw new Error(`API request failed: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('API Response:', data);
+      
+      // Check if it's an async job or direct result
+      if (data.jobId) {
+        // Async job - poll for status using the jobId
+        console.log('Starting to poll job:', data.jobId);
+        pollJobStatus(data.jobId, newJob.id);
+        
+        // Show the job is processing
+        updateJob(newJob.id, {
+          result: { status: 'Processing...', jobId: data.jobId },
+        });
+        setShowResult(true);
+      } else if (data.job && data.job.id) {
+        // Alternative async job format
+        console.log('Starting to poll job (alt format):', data.job.id);
+        pollJobStatus(data.job.id, newJob.id);
+        
+        updateJob(newJob.id, {
+          result: { status: 'Processing...', jobId: data.job.id },
+        });
+        setShowResult(true);
+      } else if (data.success === false) {
+        throw new Error(data.error || 'Extraction failed');
+      } else {
+        // Direct result
+        updateJob(newJob.id, {
+          status: 'success',
+          completedAt: new Date().toISOString(),
+          result: data.data || data,
+        });
+        setShowResult(true);
+      }
+    } catch (error: any) {
+      updateJob(newJob.id, {
+        status: 'error',
+        completedAt: new Date().toISOString(),
+        error: error.message,
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pollJobStatus = async (jobId: string, localJobId: string) => {
+    let pollCount = 0;
+    const maxPolls = 60; // Poll for up to 2 minutes
+    
+    const interval = setInterval(async () => {
+      pollCount++;
+      
+      try {
+        console.log(`Polling job ${jobId} (attempt ${pollCount}/${maxPolls})`);
+        
+        // Use the correct /api/extract/{jobId} endpoint
+        let response = await fetch(`${API_BASE}/api/extract/${jobId}`, {
+          headers: {
+            'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123',
+          },
+        });
+        
+        if (!response.ok) {
+          console.error('Failed to poll job status:', response.status);
+          
+          // If we get a 404, the job might not exist yet, keep polling for a bit
+          if (response.status === 404 && pollCount < 5) {
+            updateJob(localJobId, {
+              result: { 
+                status: `Waiting for job... (${pollCount}/${maxPolls})`,
+                jobId,
+                message: 'Job is being created...'
+              },
+            });
+            return;
+          }
+          
+          // For other errors or persistent 404s, fail immediately
+          if (response.status !== 404 || pollCount >= 5) {
+            clearInterval(interval);
+            const errorText = await response.text().catch(() => 'Unknown error');
+            updateJob(localJobId, {
+              status: 'error',
+              completedAt: new Date().toISOString(),
+              error: `API Error (${response.status}): ${errorText}`,
+            });
+            return;
+          }
+          
+          if (pollCount >= maxPolls) {
+            clearInterval(interval);
+            updateJob(localJobId, {
+              status: 'error',
+              completedAt: new Date().toISOString(),
+              error: 'Job polling timeout - extraction took too long',
+            });
+          }
+          return;
+        }
+        
+        const data = await response.json();
+        console.log('Job poll response:', data);
+        
+        // Check various status fields
+        const status = data.status || data.jobStatus;
+        
+        if (status === 'completed' || status === 'complete' || status === 'success') {
+          clearInterval(interval);
+          const result = data.result || data.data || data.extraction || data;
+          console.log('Job completed with result:', result);
+          
+          updateJob(localJobId, {
+            status: 'success',
+            completedAt: new Date().toISOString(),
+            result: result,
+          });
+          setShowResult(true);
+        } else if (status === 'failed' || status === 'error') {
+          clearInterval(interval);
+          updateJob(localJobId, {
+            status: 'error',
+            completedAt: new Date().toISOString(),
+            error: data.error || data.message || 'Job failed',
+          });
+        } else if (data.data || data.result || data.extraction) {
+          // Sometimes the result is returned directly without a status
+          clearInterval(interval);
+          const result = data.data || data.result || data.extraction;
+          console.log('Got direct result:', result);
+          
+          updateJob(localJobId, {
+            status: 'success',
+            completedAt: new Date().toISOString(),
+            result: result,
+          });
+          setShowResult(true);
+        } else {
+          // Still processing
+          updateJob(localJobId, {
+            result: { 
+              status: status || 'processing',
+              jobId,
+              message: `Processing... (${pollCount}/${maxPolls})`,
+              details: data
+            },
+          });
+        }
+      } catch (error) {
+        console.error('Poll error:', error);
+        updateJob(localJobId, {
+          result: { 
+            status: 'polling',
+            jobId,
+            message: `Polling... (${pollCount}/${maxPolls})`,
+            error: error.message
+          },
+        });
+      }
+    }, 2000);
+    
+    // Clean up after 5 minutes
+    setTimeout(() => clearInterval(interval), 300000);
+  };
+
+  const updateJob = (jobId: string, updates: Partial<Job>) => {
+    setJobs((prev) =>
+      prev.map((job) => (job.id === jobId ? { ...job, ...updates } : job))
+    );
+    if (activeJob?.id === jobId) {
+      setActiveJob((prev) => (prev ? { ...prev, ...updates } : null));
+    }
+  };
+
+  const config = getModeConfig(mode);
+
+  return (
+    <div className="min-h-screen bg-white">
+      {/* Header */}
+      <div className="border-b">
+        <div className="container mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-semibold">Atlas Codex</h1>
+            <Badge variant="outline">API Connected</Badge>
+          </div>
+        </div>
+      </div>
+
+      <div className="container mx-auto px-6 py-8">
+        <div className="max-w-6xl mx-auto">
+          {/* Mode Selector */}
+          <div className="flex gap-2 mb-6">
+            {(['scrape', 'search', 'map', 'crawl'] as Mode[]).map((m) => {
+              const mConfig = getModeConfig(m);
+              return (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className={
+                    mode === m
+                      ? 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all bg-orange-500 text-white'
+                      : 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }
+                >
+                  {mConfig.icon}
+                  {mConfig.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Main Input Panel */}
+            <div className="lg:col-span-2 space-y-6">
+              {/* URL Input */}
+              <Card>
+                <CardContent className="p-6">
+                  <Label htmlFor="url" className="text-sm font-medium mb-2 block">
+                    URL to {mode}
+                  </Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="url"
+                      placeholder="example.com"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      className="flex-1"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !loading) {
+                          handleStart();
+                        }
+                      }}
+                    />
+                    <Button
+                      onClick={handleStart}
+                      disabled={loading || !url}
+                      className="bg-orange-500 hover:bg-orange-600 text-white min-w-[140px]"
+                    >
+                      {loading ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Processing
+                        </>
+                      ) : (
+                        config.action
+                      )}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">{config.description}</p>
+                </CardContent>
+              </Card>
+
+              {/* Format Selector */}
+              <Card>
+                <CardContent className="p-6">
+                  <Label className="text-sm font-medium mb-3 block">Output Format</Label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {formatOptions.map((fmt) => (
+                      <button
+                        key={fmt.value}
+                        onClick={() => setFormat(fmt.value)}
+                        className={
+                          format === fmt.value
+                            ? 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all bg-orange-100 text-orange-600 border border-orange-300'
+                            : 'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100'
+                        }
+                      >
+                        {fmt.icon}
+                        {fmt.label}
+                      </button>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Result Display */}
+              {activeJob && activeJob.result && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center justify-between">
+                      <span>Extraction Result</span>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm">
+                          <Copy className="w-4 h-4 mr-1" />
+                          Copy
+                        </Button>
+                        <Button variant="outline" size="sm">
+                          <Download className="w-4 h-4 mr-1" />
+                          Export
+                        </Button>
+                      </div>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="bg-gray-50 rounded-lg p-4 max-h-96 overflow-auto">
+                      <pre className="text-xs font-mono whitespace-pre-wrap">
+                        {(() => {
+                          // Extract the actual data from the result structure
+                          let displayData = activeJob.result;
+                          
+                          // If result has a data property, use that (from API response)
+                          if (displayData?.data) {
+                            displayData = displayData.data;
+                          }
+                          
+                          // If it's still processing or has status messages
+                          if (displayData?.status === 'processing' || displayData?.status === 'Processing...') {
+                            return JSON.stringify(displayData, null, 2);
+                          }
+                          
+                          // Display the extracted content
+                          return typeof displayData === 'object' 
+                            ? JSON.stringify(displayData, null, 2)
+                            : displayData;
+                        })()}
+                      </pre>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+
+            {/* Options Panel - Always Visible */}
+            <div className="space-y-6">
+              {/* Extraction Options */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Options</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {mode === 'scrape' && (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="include-html" className="text-sm">
+                          Include HTML
+                        </Label>
+                        <Switch
+                          id="include-html"
+                          checked={includeHtml}
+                          onCheckedChange={setIncludeHtml}
+                        />
+                      </div>
+                      
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="main-content" className="text-sm">
+                          Only Main Content
+                        </Label>
+                        <Switch
+                          id="main-content"
+                          checked={onlyMainContent}
+                          onCheckedChange={setOnlyMainContent}
+                        />
+                      </div>
+                      
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="include-links" className="text-sm">
+                          Include Links
+                        </Label>
+                        <Switch
+                          id="include-links"
+                          checked={includeLinks}
+                          onCheckedChange={setIncludeLinks}
+                        />
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label htmlFor="wait-selector" className="text-sm">
+                          Wait for Selector
+                        </Label>
+                        <Input
+                          id="wait-selector"
+                          placeholder=".content, #main"
+                          value={waitForSelector}
+                          onChange={(e) => setWaitForSelector(e.target.value)}
+                          className="text-sm"
+                        />
+                      </div>
+                    </>
+                  )}
+                  
+                  {mode === 'crawl' && (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="subdomains" className="text-sm">
+                          Include Subdomains
+                        </Label>
+                        <Switch
+                          id="subdomains"
+                          checked={includeSubdomains}
+                          onCheckedChange={setIncludeSubdomains}
+                        />
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label htmlFor="max-depth" className="text-sm">
+                          Max Crawl Depth: {maxCrawlDepth}
+                        </Label>
+                        <input
+                          type="range"
+                          id="max-depth"
+                          min="1"
+                          max="10"
+                          value={maxCrawlDepth}
+                          onChange={(e) => setMaxCrawlDepth(Number(e.target.value))}
+                          className="w-full"
+                        />
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label htmlFor="limit" className="text-sm">
+                          Page Limit: {limit}
+                        </Label>
+                        <input
+                          type="range"
+                          id="limit"
+                          min="1"
+                          max="100"
+                          value={limit}
+                          onChange={(e) => setLimit(Number(e.target.value))}
+                          className="w-full"
+                        />
+                      </div>
+                    </>
+                  )}
+                  
+                  {mode === 'search' && (
+                    <div className="space-y-2">
+                      <Label htmlFor="search-query" className="text-sm">
+                        Search Query
+                      </Label>
+                      <Input
+                        id="search-query"
+                        placeholder="Enter search terms..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="text-sm"
+                      />
+                    </div>
+                  )}
+                  
+                  {mode === 'map' && (
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="map-subdomains" className="text-sm">
+                        Include Subdomains
+                      </Label>
+                      <Switch
+                        id="map-subdomains"
+                        checked={includeSubdomains}
+                        onCheckedChange={setIncludeSubdomains}
+                      />
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Recent Jobs */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Recent Jobs</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {jobs.length === 0 ? (
+                    <p className="text-sm text-gray-500">No jobs yet</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {jobs.slice(0, 5).map((job) => (
+                        <button
+                          key={job.id}
+                          onClick={() => {
+                            setActiveJob(job);
+                            setShowResult(true);
+                          }}
+                          className={
+                            activeJob?.id === job.id
+                              ? 'w-full flex items-center gap-2 p-2 rounded-lg text-left transition-all bg-orange-50 border border-orange-200'
+                              : 'w-full flex items-center gap-2 p-2 rounded-lg text-left transition-all hover:bg-gray-50'
+                          }
+                        >
+                          {job.status === 'running' && (
+                            <Loader2 className="w-4 h-4 text-orange-500 animate-spin flex-shrink-0" />
+                          )}
+                          {job.status === 'success' && (
+                            <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
+                          )}
+                          {job.status === 'error' && (
+                            <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">
+                              {job.url.replace(/^https?:\/\//, '')}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              {job.mode} • {new Date(job.startedAt).toLocaleTimeString()}
+                            </p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* API Code */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Code className="w-4 h-4" />
+                    API Code
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="bg-gray-900 text-gray-100 rounded-lg p-3 text-xs font-mono">
+                    <div className="text-green-400"># {config.label} API</div>
+                    <div className="text-blue-400">curl</div> -X POST \<br />
+                    &nbsp;&nbsp;{API_BASE}/{mode} \<br />
+                    &nbsp;&nbsp;-H <span className="text-yellow-300">"x-api-key: YOUR_KEY"</span> \<br />
+                    &nbsp;&nbsp;-d '{JSON.stringify({ url: url || 'example.com', format }, null, 2)}'
+                  </div>
+                  <Button variant="outline" size="sm" className="mt-3 w-full">
+                    <Copy className="w-4 h-4 mr-1" />
+                    Copy Code
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;

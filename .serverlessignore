@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/**
+packages/*/node_modules/**
+packages/frontend/**
+packages/worker/**
+packages/core/src/**
+packages/api/node_modules/**
+
+# Development files
+*.test.js
+*.spec.js
+**/*.test.ts
+**/*.spec.ts
+.git/**
+.github/**
+.vscode/**
+*.md
+.env
+.env.*
+
+# Build artifacts
+packages/*/dist/**
+packages/*/build/**
+*.log
+
+# Documentation
+docs/**
+README.md
+LICENSE
+
+# Other unnecessary files
+.DS_Store
+kubernetes/**
+test/**
+tests/**

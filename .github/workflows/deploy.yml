@@ -1,0 +1,181 @@
+name: Deploy Atlas Codex
+
+on:
+  push:
+    branches: [main, production]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+  AWS_REGION: us-west-2
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm run bootstrap
+      
+      - name: Run tests
+        run: |
+          npm test
+          npm run test:integration
+      
+      - name: Run linting
+        run: npm run lint
+      
+      - name: Build packages
+        run: npm run build
+
+  build-docker:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/production'
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Build and push API
+        uses: docker/build-push-action@v4
+        with:
+          context: ./packages/api
+          push: true
+          tags: |
+            atlascodex/api:latest
+            atlascodex/api:${{ github.sha }}
+          cache-from: type=registry,ref=atlascodex/api:buildcache
+          cache-to: type=registry,ref=atlascodex/api:buildcache,mode=max
+      
+      - name: Build and push Worker
+        uses: docker/build-push-action@v4
+        with:
+          context: ./packages/worker
+          push: true
+          tags: |
+            atlascodex/worker:latest
+            atlascodex/worker:${{ github.sha }}
+          cache-from: type=registry,ref=atlascodex/worker:buildcache
+          cache-to: type=registry,ref=atlascodex/worker:buildcache,mode=max
+      
+      - name: Build and push Frontend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./packages/frontend
+          push: true
+          tags: |
+            atlascodex/frontend:latest
+            atlascodex/frontend:${{ github.sha }}
+          cache-from: type=registry,ref=atlascodex/frontend:buildcache
+          cache-to: type=registry,ref=atlascodex/frontend:buildcache,mode=max
+
+  deploy-staging:
+    needs: build-docker
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Deploy to ECS Staging
+        run: |
+          aws ecs update-service \
+            --cluster atlas-staging \
+            --service atlas-api \
+            --force-new-deployment
+          
+          aws ecs update-service \
+            --cluster atlas-staging \
+            --service atlas-worker \
+            --force-new-deployment
+          
+          aws ecs update-service \
+            --cluster atlas-staging \
+            --service atlas-frontend \
+            --force-new-deployment
+      
+      - name: Wait for deployment
+        run: |
+          aws ecs wait services-stable \
+            --cluster atlas-staging \
+            --services atlas-api atlas-worker atlas-frontend
+
+  deploy-production:
+    needs: build-docker
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/production'
+    environment: production
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Deploy to ECS Production
+        run: |
+          aws ecs update-service \
+            --cluster atlas-production \
+            --service atlas-api \
+            --force-new-deployment
+          
+          aws ecs update-service \
+            --cluster atlas-production \
+            --service atlas-worker \
+            --force-new-deployment
+          
+          aws ecs update-service \
+            --cluster atlas-production \
+            --service atlas-frontend \
+            --force-new-deployment
+      
+      - name: Wait for deployment
+        run: |
+          aws ecs wait services-stable \
+            --cluster atlas-production \
+            --services atlas-api atlas-worker atlas-frontend
+      
+      - name: Run smoke tests
+        run: |
+          curl -f https://api.atlascodex.com/health
+          curl -f https://app.atlascodex.com
+      
+      - name: Notify deployment
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: 'Production deployment completed!'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        if: always()

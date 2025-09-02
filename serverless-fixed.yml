@@ -1,0 +1,361 @@
+# Fixed Serverless config for Atlas Codex with proper timeout handling
+service: atlas-codex
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-west-2
+  environment:
+    NODE_ENV: production
+    MASTER_API_KEY: ${env:MASTER_API_KEY, 'test-key-123'}
+    OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+    QUEUE_URL: 
+      Ref: JobQueue
+    DLQ_URL:
+      Ref: JobDeadLetterQueue
+    LAMBDA_TIMEOUT: 280  # Pass timeout to Lambda (280 seconds, leaving buffer)
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:*
+            - s3:*
+            - sqs:*
+            - execute-api:ManageConnections
+            - execute-api:Invoke
+          Resource: "*"
+
+functions:
+  api:
+    handler: api/lambda.handler
+    events:
+      - http:
+          path: /{proxy+}
+          method: ANY
+          cors: true
+      - http:
+          path: /
+          method: ANY
+          cors: true
+    timeout: 30
+    memorySize: 1024
+    environment:
+      WEBSOCKET_API_ENDPOINT:
+        Fn::Sub: "wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
+  
+  worker:
+    handler: api/worker-fixed.handler  # Using the fixed worker
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - JobQueue
+              - Arn
+          batchSize: 1
+          maximumBatchingWindowInSeconds: 0  # Process immediately
+          functionResponseType: ReportBatchItemFailures  # Enable partial batch failure
+    timeout: 280  # Reduced from 300 to leave buffer for cleanup
+    memorySize: 3008  # Maximum memory for better performance
+    reservedConcurrentExecutions: 5  # Limit concurrent executions
+    environment:
+      ARTIFACTS_BUCKET:
+        Ref: ArtifactsBucket
+      WEBSOCKET_API_ENDPOINT:
+        Fn::Sub: "wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
+      JOBS_TABLE: ${self:service}-jobs
+      CONNECTIONS_TABLE: ${self:service}-connections
+    # Add async configuration for better retry handling
+    maximumRetryAttempts: 1  # Retry once on failure
+    maximumRecordAge: 3600  # Discard messages older than 1 hour
+  
+  # Job monitor function - runs every 5 minutes to check for stuck jobs
+  jobMonitor:
+    handler: api/monitor.handler
+    events:
+      - schedule: rate(5 minutes)
+    timeout: 60
+    environment:
+      JOBS_TABLE: ${self:service}-jobs
+      DLQ_URL:
+        Ref: JobDeadLetterQueue
+  
+  # WebSocket Connection Handler
+  websocketConnect:
+    handler: api/websocket.connect
+    events:
+      - websocket: $connect
+    environment:
+      CONNECTIONS_TABLE:
+        Ref: ConnectionsTable
+  
+  # WebSocket Disconnect Handler  
+  websocketDisconnect:
+    handler: api/websocket.disconnect
+    events:
+      - websocket: $disconnect
+    environment:
+      CONNECTIONS_TABLE:
+        Ref: ConnectionsTable
+  
+  # WebSocket Default Handler
+  websocketDefault:
+    handler: api/websocket.default
+    events:
+      - websocket: $default
+    environment:
+      CONNECTIONS_TABLE:
+        Ref: ConnectionsTable
+
+resources:
+  Resources:
+    JobsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-jobs
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: status
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: N
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: status-createdAt-index
+            KeySchema:
+              - AttributeName: status
+                KeyType: HASH
+              - AttributeName: createdAt
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+        StreamSpecification:
+          StreamViewType: NEW_AND_OLD_IMAGES
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+    
+    JobQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-queue
+        VisibilityTimeout: 360  # 6 minutes (longer than Lambda timeout)
+        MessageRetentionPeriod: 86400  # 1 day
+        ReceiveMessageWaitTimeSeconds: 20  # Long polling
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt:
+              - JobDeadLetterQueue
+              - Arn
+          maxReceiveCount: 2  # Move to DLQ after 2 failed attempts
+        # Add these for better handling
+        DelaySeconds: 0
+        MaximumMessageSize: 262144  # 256 KB
+    
+    # Dead Letter Queue for failed jobs
+    JobDeadLetterQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-dlq
+        MessageRetentionPeriod: 1209600  # 14 days
+        VisibilityTimeout: 360
+    
+    # Alarm for DLQ messages
+    DeadLetterQueueAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: ${self:service}-dlq-alarm
+        AlarmDescription: Alert when messages are in the DLQ
+        MetricName: ApproximateNumberOfMessagesVisible
+        Namespace: AWS/SQS
+        Statistic: Sum
+        Period: 300
+        EvaluationPeriods: 1
+        Threshold: 1
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        Dimensions:
+          - Name: QueueName
+            Value: ${self:service}-dlq
+    
+    # Alarm for Lambda errors
+    WorkerErrorAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: ${self:service}-worker-errors
+        AlarmDescription: Alert on worker Lambda errors
+        MetricName: Errors
+        Namespace: AWS/Lambda
+        Statistic: Sum
+        Period: 300
+        EvaluationPeriods: 1
+        Threshold: 5
+        ComparisonOperator: GreaterThanThreshold
+        Dimensions:
+          - Name: FunctionName
+            Value: ${self:service}-${self:provider.stage, 'dev'}-worker
+    
+    # Alarm for Lambda duration
+    WorkerDurationAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: ${self:service}-worker-duration
+        AlarmDescription: Alert when worker approaches timeout
+        MetricName: Duration
+        Namespace: AWS/Lambda
+        Statistic: Maximum
+        Period: 300
+        EvaluationPeriods: 1
+        Threshold: 270000  # 270 seconds (4.5 minutes)
+        ComparisonOperator: GreaterThanThreshold
+        Dimensions:
+          - Name: FunctionName
+            Value: ${self:service}-${self:provider.stage, 'dev'}-worker
+    
+    ArtifactsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:service}-artifacts-${sls:instanceId}
+        LifecycleConfiguration:
+          Rules:
+            - Id: DeleteOldArtifacts
+              Status: Enabled
+              ExpirationInDays: 7  # Delete artifacts after 7 days
+        CorsConfiguration:
+          CorsRules:
+            - AllowedOrigins: ["*"]
+              AllowedHeaders: ["*"]
+              AllowedMethods: [GET, PUT, POST]
+    
+    # WebSocket API
+    WebSocketApi:
+      Type: AWS::ApiGatewayV2::Api
+      Properties:
+        Name: ${self:service}-websocket
+        ProtocolType: WEBSOCKET
+        RouteSelectionExpression: "$request.body.action"
+    
+    # WebSocket Connections Table
+    ConnectionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-connections
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: connectionId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: connectionId
+            KeyType: HASH
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+    
+    # WebSocket Routes and Integrations (keep existing configuration)
+    ConnectRoute:
+      Type: AWS::ApiGatewayV2::Route
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        RouteKey: $connect
+        AuthorizationType: NONE
+        Target:
+          Fn::Sub: "integrations/${ConnectIntegration}"
+    
+    ConnectIntegration:
+      Type: AWS::ApiGatewayV2::Integration
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        IntegrationType: AWS_PROXY
+        IntegrationUri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebsocketConnectLambdaFunction.Arn}/invocations"
+    
+    DisconnectRoute:
+      Type: AWS::ApiGatewayV2::Route  
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        RouteKey: $disconnect
+        AuthorizationType: NONE
+        Target:
+          Fn::Sub: "integrations/${DisconnectIntegration}"
+    
+    DisconnectIntegration:
+      Type: AWS::ApiGatewayV2::Integration
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        IntegrationType: AWS_PROXY
+        IntegrationUri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebsocketDisconnectLambdaFunction.Arn}/invocations"
+    
+    DefaultRoute:
+      Type: AWS::ApiGatewayV2::Route
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        RouteKey: $default
+        AuthorizationType: NONE
+        Target:
+          Fn::Sub: "integrations/${DefaultIntegration}"
+    
+    DefaultIntegration:
+      Type: AWS::ApiGatewayV2::Integration
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        IntegrationType: AWS_PROXY
+        IntegrationUri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebsocketDefaultLambdaFunction.Arn}/invocations"
+    
+    # WebSocket Stage
+    WebSocketStage:
+      Type: AWS::ApiGatewayV2::Stage
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        StageName: dev
+        AutoDeploy: true
+    
+    # Lambda Permissions for WebSocket
+    WebSocketConnectPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName:
+          Ref: WebsocketConnectLambdaFunction
+        Principal: apigateway.amazonaws.com
+        Action: lambda:InvokeFunction
+    
+    WebSocketDisconnectPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName:
+          Ref: WebsocketDisconnectLambdaFunction
+        Principal: apigateway.amazonaws.com
+        Action: lambda:InvokeFunction
+    
+    WebSocketDefaultPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName:
+          Ref: WebsocketDefaultLambdaFunction
+        Principal: apigateway.amazonaws.com
+        Action: lambda:InvokeFunction
+
+  Outputs:
+    QueueUrl:
+      Description: URL of the job queue
+      Value:
+        Ref: JobQueue
+    DLQUrl:
+      Description: URL of the dead letter queue
+      Value:
+        Ref: JobDeadLetterQueue
+    WebSocketUrl:
+      Description: WebSocket API URL
+      Value:
+        Fn::Sub: "wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/dev"

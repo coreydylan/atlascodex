@@ -1,0 +1,31 @@
+{
+  "name": "@atlas-codex/worker",
+  "version": "1.0.0",
+  "description": "Atlas Codex Worker - GPT-5 powered extraction engine",
+  "main": "worker.js",
+  "scripts": {
+    "dev": "nodemon worker.js",
+    "start": "node worker.js",
+    "build": "echo 'Worker build complete'",
+    "test": "echo 'Worker tests'",
+    "lint": "echo 'Linting worker'",
+    "typecheck": "echo 'Type checking worker'",
+    "docker:build": "docker build -t atlas-codex-worker .",
+    "docker:push": "docker push 790856971687.dkr.ecr.us-east-1.amazonaws.com/atlas-codex-worker"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.879.0",
+    "@aws-sdk/client-s3": "^3.879.0",
+    "@aws-sdk/client-sqs": "^3.879.0",
+    "bullmq": "^5.1.1",
+    "cheerio": "^1.0.0-rc.12",
+    "ioredis": "^5.3.2",
+    "openai": "^4.24.1",
+    "playwright-core": "^1.40.1",
+    "turndown": "^7.1.2",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

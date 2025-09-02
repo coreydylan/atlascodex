@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Atlas Codex - Web Scraping Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+    <style>
+        .tab-active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .code-block {
+            background-color: #2d2d2d;
+            border-radius: 8px;
+            padding: 1rem;
+            overflow-x: auto;
+        }
+        pre[class*="language-"] {
+            background: transparent;
+            margin: 0;
+            padding: 0;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const API_BASE = 'https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/api';
+
+        function App() {
+            const [activeTab, setActiveTab] = useState('scrape');
+            const [loading, setLoading] = useState(false);
+            const [jobs, setJobs] = useState([]);
+            const [results, setResults] = useState({});
+
+            // Scrape state
+            const [scrapeUrl, setScrapeUrl] = useState('');
+            const [scrapeOptions, setScrapeOptions] = useState({
+                formats: ['markdown', 'html', 'links'],
+                onlyMainContent: true,
+                waitFor: 0,
+                timeout: 30000
+            });
+
+            // Crawl state
+            const [crawlUrl, setCrawlUrl] = useState('');
+            const [crawlOptions, setCrawlOptions] = useState({
+                maxPages: 10,
+                depth: 2,
+                includePatterns: [],
+                excludePatterns: [],
+                followLinks: true
+            });
+
+            // Extract state
+            const [extractUrl, setExtractUrl] = useState('');
+            const [extractSchema, setExtractSchema] = useState(`{
+  "type": "object",
+  "properties": {
+    "title": { "type": "string" },
+    "price": { "type": "number" },
+    "description": { "type": "string" }
+  }
+}`);
+            const [extractPrompt, setExtractPrompt] = useState('Extract product information from this page');
+
+            // Session options
+            const [sessionOptions, setSessionOptions] = useState({
+                useProxy: false,
+                solveCaptchas: false,
+                blockAds: true,
+                stealth: true
+            });
+
+            // Poll for job status
+            useEffect(() => {
+                const interval = setInterval(() => {
+                    jobs.forEach(async (job) => {
+                        if (job.status === 'pending' || job.status === 'processing') {
+                            try {
+                                const response = await fetch(`${API_BASE}/${job.type}/${job.jobId}`, {
+                                    headers: { 
+                                        'X-Api-Key': 'test-key-123'
+                                    }
+                                });
+                                const data = await response.json();
+                                
+                                // Update results with full data
+                                setResults(prev => ({
+                                    ...prev,
+                                    [job.jobId]: data
+                                }));
+                                
+                                // Update job status
+                                setJobs(prev => prev.map(j => 
+                                    j.jobId === job.jobId ? { 
+                                        ...j, 
+                                        status: data.status,
+                                        updatedAt: new Date().toISOString()
+                                    } : j
+                                ));
+                            } catch (error) {
+                                console.error('Failed to fetch job status:', error);
+                            }
+                        }
+                    });
+                }, 2000);
+
+                return () => clearInterval(interval);
+            }, [jobs]);
+
+            const handleScrape = async () => {
+                setLoading(true);
+                try {
+                    const response = await fetch(`${API_BASE}/scrape`, {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'X-Api-Key': 'test-key-123'
+                        },
+                        body: JSON.stringify({
+                            url: scrapeUrl,
+                            scrapeOptions,
+                            sessionOptions
+                        })
+                    });
+                    const data = await response.json();
+                    setJobs(prev => [...prev, { ...data, type: 'scrape' }]);
+                } catch (error) {
+                    console.error('Scrape error:', error);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const handleCrawl = async () => {
+                setLoading(true);
+                try {
+                    const response = await fetch(`${API_BASE}/crawl`, {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'X-Api-Key': 'test-key-123'
+                        },
+                        body: JSON.stringify({
+                            url: crawlUrl,
+                            ...crawlOptions,
+                            sessionOptions
+                        })
+                    });
+                    const data = await response.json();
+                    setJobs(prev => [...prev, { ...data, type: 'crawl' }]);
+                } catch (error) {
+                    console.error('Crawl error:', error);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const handleExtract = async () => {
+                setLoading(true);
+                try {
+                    const response = await fetch(`${API_BASE}/extract`, {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'X-Api-Key': 'test-key-123'
+                        },
+                        body: JSON.stringify({
+                            url: extractUrl,
+                            schema: JSON.parse(extractSchema),
+                            prompt: extractPrompt,
+                            sessionOptions
+                        })
+                    });
+                    const data = await response.json();
+                    setJobs(prev => [...prev, { ...data, type: 'extract' }]);
+                } catch (error) {
+                    console.error('Extract error:', error);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    {/* Header */}
+                    <div className="gradient-bg text-white p-6 shadow-lg">
+                        <div className="max-w-7xl mx-auto">
+                            <h1 className="text-3xl font-bold">Atlas Codex</h1>
+                            <p className="text-purple-100 mt-1">High-Performance Web Scraping Platform</p>
+                        </div>
+                    </div>
+
+                    <div className="max-w-7xl mx-auto p-6">
+                        {/* Tabs */}
+                        <div className="flex space-x-2 mb-6">
+                            <button
+                                onClick={() => setActiveTab('scrape')}
+                                className={`px-6 py-3 rounded-lg font-medium transition-all ${
+                                    activeTab === 'scrape' ? 'tab-active' : 'bg-white text-gray-700 hover:bg-gray-100'
+                                }`}
+                            >
+                                🔍 Scrape
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('crawl')}
+                                className={`px-6 py-3 rounded-lg font-medium transition-all ${
+                                    activeTab === 'crawl' ? 'tab-active' : 'bg-white text-gray-700 hover:bg-gray-100'
+                                }`}
+                            >
+                                🕷️ Crawl
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('extract')}
+                                className={`px-6 py-3 rounded-lg font-medium transition-all ${
+                                    activeTab === 'extract' ? 'tab-active' : 'bg-white text-gray-700 hover:bg-gray-100'
+                                }`}
+                            >
+                                🤖 Extract
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            {/* Input Panel */}
+                            <div className="glass-effect rounded-xl p-6">
+                                {activeTab === 'scrape' && (
+                                    <div className="space-y-4">
+                                        <h2 className="text-xl font-semibold text-gray-800">Scrape Single Page</h2>
+                                        
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">URL</label>
+                                            <input
+                                                type="url"
+                                                value={scrapeUrl}
+                                                onChange={(e) => setScrapeUrl(e.target.value)}
+                                                placeholder="https://example.com"
+                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">Output Formats</label>
+                                            <div className="space-y-2">
+                                                {['markdown', 'html', 'links', 'screenshot'].map(format => (
+                                                    <label key={format} className="flex items-center">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={scrapeOptions.formats.includes(format)}
+                                                            onChange={(e) => {
+                                                                if (e.target.checked) {
+                                                                    setScrapeOptions(prev => ({
+                                                                        ...prev,
+                                                                        formats: [...prev.formats, format]
+                                                                    }));
+                                                                } else {
+                                                                    setScrapeOptions(prev => ({
+                                                                        ...prev,
+                                                                        formats: prev.formats.filter(f => f !== format)
+                                                                    }));
+                                                                }
+                                                            }}
+                                                            className="mr-2 text-purple-600 focus:ring-purple-500"
+                                                        />
+                                                        <span className="text-gray-700 capitalize">{format}</span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="flex items-center">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={scrapeOptions.onlyMainContent}
+                                                    onChange={(e) => setScrapeOptions(prev => ({
+                                                        ...prev,
+                                                        onlyMainContent: e.target.checked
+                                                    }))}
+                                                    className="mr-2 text-purple-600 focus:ring-purple-500"
+                                                />
+                                                <span className="text-gray-700">Extract only main content</span>
+                                            </label>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Wait (ms)</label>
+                                                <input
+                                                    type="number"
+                                                    value={scrapeOptions.waitFor}
+                                                    onChange={(e) => setScrapeOptions(prev => ({
+                                                        ...prev,
+                                                        waitFor: parseInt(e.target.value)
+                                                    }))}
+                                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Timeout (ms)</label>
+                                                <input
+                                                    type="number"
+                                                    value={scrapeOptions.timeout}
+                                                    onChange={(e) => setScrapeOptions(prev => ({
+                                                        ...prev,
+                                                        timeout: parseInt(e.target.value)
+                                                    }))}
+                                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {activeTab === 'crawl' && (
+                                    <div className="space-y-4">
+                                        <h2 className="text-xl font-semibold text-gray-800">Crawl Multiple Pages</h2>
+                                        
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Start URL</label>
+                                            <input
+                                                type="url"
+                                                value={crawlUrl}
+                                                onChange={(e) => setCrawlUrl(e.target.value)}
+                                                placeholder="https://example.com"
+                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                            />
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Max Pages</label>
+                                                <input
+                                                    type="number"
+                                                    value={crawlOptions.maxPages}
+                                                    onChange={(e) => setCrawlOptions(prev => ({
+                                                        ...prev,
+                                                        maxPages: parseInt(e.target.value)
+                                                    }))}
+                                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Depth</label>
+                                                <input
+                                                    type="number"
+                                                    value={crawlOptions.depth}
+                                                    onChange={(e) => setCrawlOptions(prev => ({
+                                                        ...prev,
+                                                        depth: parseInt(e.target.value)
+                                                    }))}
+                                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Include Patterns (one per line)</label>
+                                            <textarea
+                                                placeholder="/blog/*&#10;/products/*"
+                                                onChange={(e) => setCrawlOptions(prev => ({
+                                                    ...prev,
+                                                    includePatterns: e.target.value.split('\n').filter(p => p.trim())
+                                                }))}
+                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                                                rows="3"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="flex items-center">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={crawlOptions.followLinks}
+                                                    onChange={(e) => setCrawlOptions(prev => ({
+                                                        ...prev,
+                                                        followLinks: e.target.checked
+                                                    }))}
+                                                    className="mr-2 text-purple-600 focus:ring-purple-500"
+                                                />
+                                                <span className="text-gray-700">Follow discovered links</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {activeTab === 'extract' && (
+                                    <div className="space-y-4">
+                                        <h2 className="text-xl font-semibold text-gray-800">AI-Powered Extraction</h2>
+                                        
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">URL</label>
+                                            <input
+                                                type="url"
+                                                value={extractUrl}
+                                                onChange={(e) => setExtractUrl(e.target.value)}
+                                                placeholder="https://example.com/product"
+                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Extraction Prompt</label>
+                                            <textarea
+                                                value={extractPrompt}
+                                                onChange={(e) => setExtractPrompt(e.target.value)}
+                                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                                                rows="2"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">JSON Schema</label>
+                                            <textarea
+                                                value={extractSchema}
+                                                onChange={(e) => setExtractSchema(e.target.value)}
+                                                className="w-full px-4 py-2 font-mono text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                                                rows="8"
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Session Options */}
+                                <div className="mt-6 pt-6 border-t border-gray-200">
+                                    <h3 className="text-sm font-medium text-gray-700 mb-3">Session Options</h3>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <label className="flex items-center text-sm">
+                                            <input
+                                                type="checkbox"
+                                                checked={sessionOptions.useProxy}
+                                                onChange={(e) => setSessionOptions(prev => ({
+                                                    ...prev,
+                                                    useProxy: e.target.checked
+                                                }))}
+                                                className="mr-2 text-purple-600 focus:ring-purple-500"
+                                            />
+                                            <span className="text-gray-700">Use Proxy</span>
+                                        </label>
+                                        <label className="flex items-center text-sm">
+                                            <input
+                                                type="checkbox"
+                                                checked={sessionOptions.solveCaptchas}
+                                                onChange={(e) => setSessionOptions(prev => ({
+                                                    ...prev,
+                                                    solveCaptchas: e.target.checked
+                                                }))}
+                                                className="mr-2 text-purple-600 focus:ring-purple-500"
+                                            />
+                                            <span className="text-gray-700">Solve CAPTCHAs</span>
+                                        </label>
+                                        <label className="flex items-center text-sm">
+                                            <input
+                                                type="checkbox"
+                                                checked={sessionOptions.blockAds}
+                                                onChange={(e) => setSessionOptions(prev => ({
+                                                    ...prev,
+                                                    blockAds: e.target.checked
+                                                }))}
+                                                className="mr-2 text-purple-600 focus:ring-purple-500"
+                                            />
+                                            <span className="text-gray-700">Block Ads</span>
+                                        </label>
+                                        <label className="flex items-center text-sm">
+                                            <input
+                                                type="checkbox"
+                                                checked={sessionOptions.stealth}
+                                                onChange={(e) => setSessionOptions(prev => ({
+                                                    ...prev,
+                                                    stealth: e.target.checked
+                                                }))}
+                                                className="mr-2 text-purple-600 focus:ring-purple-500"
+                                            />
+                                            <span className="text-gray-700">Stealth Mode</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                {/* Execute Button */}
+                                <button
+                                    onClick={() => {
+                                        if (activeTab === 'scrape') handleScrape();
+                                        if (activeTab === 'crawl') handleCrawl();
+                                        if (activeTab === 'extract') handleExtract();
+                                    }}
+                                    disabled={loading}
+                                    className="mt-6 w-full gradient-bg text-white py-3 rounded-lg font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center"
+                                >
+                                    {loading ? (
+                                        <>
+                                            <div className="loader mr-3"></div>
+                                            Processing...
+                                        </>
+                                    ) : (
+                                        <>
+                                            {activeTab === 'scrape' && '🚀 Start Scraping'}
+                                            {activeTab === 'crawl' && '🕷️ Start Crawling'}
+                                            {activeTab === 'extract' && '🤖 Start Extraction'}
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+
+                            {/* Results Panel */}
+                            <div className="glass-effect rounded-xl p-6">
+                                <h2 className="text-xl font-semibold text-gray-800 mb-4">Results</h2>
+                                
+                                {jobs.length === 0 ? (
+                                    <div className="text-center py-12 text-gray-500">
+                                        <p className="text-lg mb-2">No jobs yet</p>
+                                        <p className="text-sm">Start a scraping job to see results here</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4">
+                                        {jobs.map((job, index) => (
+                                            <div key={job.jobId} className="border border-gray-200 rounded-lg p-4">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <div className="flex items-center space-x-2">
+                                                        <span className="text-sm font-medium text-gray-700">
+                                                            {job.type.toUpperCase()}
+                                                        </span>
+                                                        <span className={`px-2 py-1 text-xs rounded-full ${
+                                                            job.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                                            job.status === 'failed' ? 'bg-red-100 text-red-800' :
+                                                            job.status === 'running' ? 'bg-blue-100 text-blue-800' :
+                                                            'bg-yellow-100 text-yellow-800'
+                                                        }`}>
+                                                            {job.status}
+                                                        </span>
+                                                    </div>
+                                                    <span className="text-xs text-gray-500">
+                                                        {job.jobId}
+                                                    </span>
+                                                </div>
+
+                                                {results[job.jobId] && results[job.jobId].status === 'completed' && (
+                                                    <div className="mt-3">
+                                                        {results[job.jobId].data && (
+                                                            <div className="space-y-2">
+                                                                {results[job.jobId].data.metadata && (
+                                                                    <div className="text-sm">
+                                                                        <strong>Title:</strong> {results[job.jobId].data.metadata.title}
+                                                                    </div>
+                                                                )}
+                                                                {results[job.jobId].data.extracted && (
+                                                                    <div className="code-block">
+                                                                        <pre className="language-json">
+                                                                            <code>{JSON.stringify(results[job.jobId].data.extracted, null, 2)}</code>
+                                                                        </pre>
+                                                                    </div>
+                                                                )}
+                                                                {results[job.jobId].data.markdown && (
+                                                                    <details>
+                                                                        <summary className="cursor-pointer text-sm font-medium text-purple-600">
+                                                                            View Markdown
+                                                                        </summary>
+                                                                        <div className="mt-2 p-3 bg-gray-50 rounded text-sm whitespace-pre-wrap">
+                                                                            {results[job.jobId].data.markdown.slice(0, 500)}...
+                                                                        </div>
+                                                                    </details>
+                                                                )}
+                                                                {results[job.jobId].data.evidence && (
+                                                                    <div className="text-xs text-gray-500 mt-2">
+                                                                        <span className="font-medium">Evidence:</span> {results[job.jobId].data.evidence.hash.slice(0, 16)}...
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+
+                                                {job.status === 'pending' || job.status === 'running' && (
+                                                    <div className="mt-3 flex items-center justify-center py-4">
+                                                        <div className="loader"></div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* API Status */}
+                        <div className="mt-6 glass-effect rounded-xl p-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-4">
+                                    <div className="flex items-center">
+                                        <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
+                                        <span className="text-sm text-gray-600">API Status: Online</span>
+                                    </div>
+                                    <span className="text-sm text-gray-600">|</span>
+                                    <span className="text-sm text-gray-600">Browsers: Active</span>
+                                    <span className="text-sm text-gray-600">|</span>
+                                    <span className="text-sm text-gray-600">Jobs: {jobs.length}</span>
+                                </div>
+                                <div className="text-sm text-gray-500">
+                                    Atlas Codex v0.1.0
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
