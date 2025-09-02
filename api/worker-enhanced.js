@@ -754,6 +754,43 @@ class PlanExecutor {
       
       console.log(`📦 Discovered ${semanticBlocks.length} semantic blocks`);
       
+      // Debug: Check if we have DOM elements at all
+      const totalElements = $('*').length;
+      const divCount = $('div').length;
+      const sectionCount = $('section').length;
+      const staffElements = $('.staff-member, .team-member, .person, .profile, div[class*="staff"]').length;
+      console.log(`🔍 DOM Debug: ${totalElements} total elements, ${divCount} divs, ${sectionCount} sections, ${staffElements} staff-related`);
+      
+      // Debug: Sample some elements
+      $('h1, h2, h3').each((i, el) => {
+        if (i < 3) console.log(`📝 Heading ${i + 1}: "${$(el).text().trim()}"`);
+      });
+      
+      // Debug: Check for minimum content
+      const bodyText = $('body').text().trim();
+      console.log(`📄 Body content length: ${bodyText.length} chars, first 200: "${bodyText.substring(0, 200)}"`);
+      
+      if (semanticBlocks.length === 0) {
+        // Try manual element detection for debugging
+        const manualBlocks = [];
+        $('div').each((i, div) => {
+          const $div = $(div);
+          const text = $div.text().trim();
+          if (text.length >= minSize && !this.isNavigationalElement($div)) {
+            manualBlocks.push({
+              selector: this.generateCSSPath($div, $),
+              text_length: text.length,
+              text_preview: text.substring(0, 100),
+              classes: $div.attr('class') || ''
+            });
+          }
+        });
+        console.log(`🚨 Manual block detection found ${manualBlocks.length} potential blocks`);
+        if (manualBlocks.length > 0) {
+          console.log('🚨 Sample manual block:', manualBlocks[0]);
+        }
+      }
+      
       // Apply weak supervision to classify and filter blocks
       const classifiedBlocks = this.applyWeakSupervision(semanticBlocks);
       
@@ -1129,8 +1166,19 @@ class PlanExecutor {
     // Extract the relevant output data based on pass type
     if (pass.output === 'top_candidates') {
       // Pass A: return top candidates
-      result.data = result.context_final?.top_candidates || 
-                    result.context_final?.semantic_blocks || [];
+      let candidates = result.context_final?.top_candidates || 
+                      result.context_final?.semantic_blocks || [];
+      
+      // Clean circular references from DOM elements
+      result.data = candidates.map(candidate => {
+        if (candidate && typeof candidate === 'object') {
+          const cleaned = { ...candidate };
+          // Remove the Cheerio element to prevent circular references
+          delete cleaned.element;
+          return cleaned;
+        }
+        return candidate;
+      });
     } else if (pass.output === 'final_results') {
       // Pass B: return final mapped results  
       result.data = result.context_final?.field_mappings || 
@@ -4956,13 +5004,19 @@ class SimpleEvaluator {
  */
 async function processWithPlanBasedSystem(content, params) {
   console.log('🚀 Using plan-based extraction system');
+  console.log('📄 Content type:', typeof content);
+  console.log('📄 Content length:', content?.length || 0);
+  console.log('📄 Content preview (first 300 chars):', content?.substring(0, 300) || 'No content');
   
   try {
-    // Create extraction task from parameters
+    // Create extraction task from parameters - support both parameter formats  
+    const instructions = params.extractionInstructions || params.instructions;
+    const targetSchema = params.outputSchema || params.schema;
+    
     const task = {
       url: params.url,
-      instructions: params.extractionInstructions,
-      targetSchema: params.outputSchema,
+      instructions: instructions,
+      targetSchema: targetSchema,
       constraints: {
         max_results: 10,
         quality_threshold: 0.6,
@@ -4978,7 +5032,7 @@ async function processWithPlanBasedSystem(content, params) {
     const executor = new PlanExecutor();
     const initialInputs = {
       html: content, // Raw HTML content
-      target_schema: params.outputSchema
+      target_schema: targetSchema
     };
     
     let executionResult;
@@ -4996,7 +5050,7 @@ async function processWithPlanBasedSystem(content, params) {
     
     // Evaluate results
     const evaluator = new SimpleEvaluator();
-    const evaluation = evaluator.evaluate(executionResult, params.outputSchema);
+    const evaluation = evaluator.evaluate(executionResult, targetSchema);
     
     // Initialize comprehensive logging
     const logger = new ComprehensiveLogger();
@@ -5808,19 +5862,31 @@ async function performExtraction(jobId, params) {
       }
     };
     
-    // Check for structured extraction request
-    const needsStructuredExtraction = params.formats && params.formats.includes('structured') && 
-                                    params.extractionInstructions && params.outputSchema;
+    // Check for structured extraction request - support both old and new parameter formats
+    const needsStructuredExtraction = (
+      (params.formats && params.formats.includes('structured')) || 
+      params.extractionType === 'structured' ||
+      params.extractionMethod === 'plan_based'
+    ) && (
+      params.extractionInstructions || params.instructions
+    ) && (
+      params.outputSchema || params.schema
+    );
     
     if (needsStructuredExtraction) {
       console.log('🎯 Structured extraction requested - using plan-based system');
       
       try {
-        // Convert HTML to text for plan processing
-        const plainTextContent = htmlToText(contentHtml);
+        // Pass HTML content to plan-based system (it needs DOM structure)
+        const htmlContent = contentHtml;
         
-        // Process with plan-based system
-        const skillResult = await processWithPlanBasedSystem(plainTextContent, params);
+        // Process with plan-based system - normalize parameter names
+        const normalizedParams = {
+          ...params,
+          extractionInstructions: params.extractionInstructions || params.instructions,
+          outputSchema: params.outputSchema || params.schema
+        };
+        const skillResult = await processWithPlanBasedSystem(htmlContent, normalizedParams);
         
         if (skillResult.success) {
           // Replace the raw content with structured data
@@ -6080,69 +6146,6 @@ async function performMap(jobId, params) {
   }
 }
 
-// Lambda handler for SQS events
-exports.handler = async (event) => {
-  console.log('Enhanced Worker received event:', JSON.stringify(event, null, 2));
-  
-  const results = [];
-  
-  for (const record of event.Records) {
-    try {
-      const message = JSON.parse(record.body);
-      const { jobId, type, params } = message;
-      
-      console.log(`Processing ${type} job: ${jobId}`);
-      
-      let result;
-      switch (type) {
-        case 'extract':
-        case 'scrape':
-          result = await performExtraction(jobId, params);
-          break;
-          
-        case 'crawl':
-          result = await performCrawl(jobId, params);
-          break;
-          
-        case 'search':
-          result = await performSearch(jobId, params);
-          break;
-          
-        case 'map':
-          result = await performMap(jobId, params);
-          break;
-          
-        default:
-          throw new Error(`Unknown job type: ${type}`);
-      }
-      
-      results.push({
-        jobId,
-        status: 'success',
-        result
-      });
-      
-    } catch (error) {
-      console.error('Failed to process record:', error);
-      results.push({
-        messageId: record.messageId,
-        status: 'error',
-        error: error.message
-      });
-    }
-  }
-  
-  // Return batch failures for SQS retry handling
-  const failedMessages = results
-    .filter(r => r.status === 'error')
-    .map(r => ({ itemIdentifier: r.messageId }));
-  
-  console.log(`Processed ${results.length} messages, ${failedMessages.length} failures`);
-  
-  return {
-    batchItemFailures: failedMessages
-  };
-};
 
 /**
  * Test function for plan-based system - tests end-to-end execution
@@ -6279,8 +6282,73 @@ if (require.main === module) {
   });
 }
 
-// Export for use in other modules
+// Lambda handler for SQS events
+const handler = async (event) => {
+  console.log('Enhanced Worker received event:', JSON.stringify(event, null, 2));
+  
+  const results = [];
+  
+  for (const record of event.Records) {
+    try {
+      const message = JSON.parse(record.body);
+      const { jobId, type, params } = message;
+      
+      console.log(`Processing ${type} job: ${jobId}`);
+      
+      let result;
+      switch (type) {
+        case 'extract':
+        case 'scrape':
+          result = await performExtraction(jobId, params);
+          break;
+          
+        case 'crawl':
+          result = await performCrawl(jobId, params);
+          break;
+          
+        case 'search':
+          result = await performSearch(jobId, params);
+          break;
+          
+        case 'map':
+          result = await performMap(jobId, params);
+          break;
+          
+        default:
+          throw new Error(`Unknown job type: ${type}`);
+      }
+      
+      results.push({
+        jobId,
+        status: 'success',
+        result
+      });
+      
+    } catch (error) {
+      console.error('Failed to process record:', error);
+      results.push({
+        messageId: record.messageId,
+        status: 'error',
+        error: error.message
+      });
+    }
+  }
+  
+  // Return batch failures for SQS retry handling
+  const failedMessages = results
+    .filter(r => r.status === 'error')
+    .map(r => ({ itemIdentifier: r.messageId }));
+  
+  console.log(`Processed ${results.length} messages, ${failedMessages.length} failures`);
+  
+  return {
+    batchItemFailures: failedMessages
+  };
+};
+
+// Export for use in other modules and Lambda
 module.exports = {
+  handler,
   processWithPlanBasedSystem,
   PlanExecutor,
   BasicPlanner,

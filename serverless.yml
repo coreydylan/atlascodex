@@ -26,6 +26,7 @@ provider:
 package:
   individually: true
   patterns:
+    - '!**'
     - '!packages/**'
     - '!node_modules/**'
     - '!.git/**'
@@ -35,7 +36,9 @@ package:
     - '!tests/**'
     - '!.claude/**'
     - '!.serverless/**'
-    - 'api/**'
+    - '!test_payloads/**'
+    - '!STANDARD_TEST_SUITE.md'
+    - '!run_test.sh'
 
 functions:
   api:
@@ -69,6 +72,34 @@ functions:
       patterns:
         - '!**'
         - 'api/worker-enhanced.js'
+        - 'node_modules/cheerio/**'
+        - 'node_modules/cheerio-select/**'
+        - 'node_modules/@aws-sdk/**'
+        - 'node_modules/@smithy/**'
+        - 'node_modules/fast-xml-parser/**'
+        - 'node_modules/strnum/**'
+        - 'node_modules/htmlparser2/**'
+        - 'node_modules/css-select/**'
+        - 'node_modules/css-what/**'
+        - 'node_modules/dom-serializer/**'
+        - 'node_modules/domelementtype/**'
+        - 'node_modules/domhandler/**'
+        - 'node_modules/domutils/**'
+        - 'node_modules/entities/**'
+        - 'node_modules/nth-check/**'
+        - 'node_modules/boolbase/**'
+        - 'node_modules/parse5/**'
+        - 'node_modules/parse5-htmlparser2-tree-adapter/**'
+        - 'node_modules/parse5-parser-stream/**'
+        - 'node_modules/encoding-sniffer/**'
+        - 'node_modules/iconv-lite/**'
+        - 'node_modules/safer-buffer/**'
+        - 'node_modules/undici/**'
+        - 'node_modules/undici-types/**'
+        - 'node_modules/whatwg-encoding/**'
+        - 'node_modules/whatwg-mimetype/**'
+        - 'node_modules/whatwg-url/**'
+        - 'node_modules/tslib/**'
     events:
       - sqs:
           arn:
@@ -87,6 +118,10 @@ functions:
   # WebSocket Connection Handler
   websocketConnect:
     handler: api/websocket.connect
+    package:
+      patterns:
+        - '!**'
+        - 'api/websocket.js'
     events:
       - websocket: $connect
     environment:
@@ -96,6 +131,10 @@ functions:
   # WebSocket Disconnect Handler  
   websocketDisconnect:
     handler: api/websocket.disconnect
+    package:
+      patterns:
+        - '!**'
+        - 'api/websocket.js'
     events:
       - websocket: $disconnect
     environment:
@@ -105,6 +144,10 @@ functions:
   # WebSocket Default Handler
   websocketDefault:
     handler: api/websocket.default
+    package:
+      patterns:
+        - '!**'
+        - 'api/websocket.js'
     events:
       - websocket: $default
     environment:
