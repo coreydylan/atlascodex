@@ -562,88 +562,162 @@ function App() {
 
       <div className="container mx-auto px-6 py-8">
         <div className="max-w-6xl mx-auto">
-          {/* Mode Selector */}
-          <div className="flex gap-2 mb-6">
-            {(['scrape', 'search', 'map', 'crawl'] as Mode[]).map((m) => {
-              const mConfig = getModeConfig(m);
-              return (
-                <button
-                  key={m}
-                  onClick={() => setMode(m)}
-                  className={
-                    mode === m
-                      ? 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all bg-orange-500 text-white'
-                      : 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }
-                >
-                  {mConfig.icon}
-                  {mConfig.label}
-                </button>
-              );
-            })}
-          </div>
+          {/* Mode Selector - Hidden in AI Mode */}
+          {!aiMode && (
+            <div className="flex gap-2 mb-6">
+              {(['scrape', 'search', 'map', 'crawl'] as Mode[]).map((m) => {
+                const mConfig = getModeConfig(m);
+                return (
+                  <button
+                    key={m}
+                    onClick={() => setMode(m)}
+                    className={
+                      mode === m
+                        ? 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all bg-orange-500 text-white'
+                        : 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }
+                  >
+                    {mConfig.icon}
+                    {mConfig.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* AI Mode Banner */}
+          {aiMode && (
+            <div className="mb-6 p-4 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="w-5 h-5 text-purple-600" />
+                <h3 className="font-semibold text-purple-900">AI-Powered Mode</h3>
+              </div>
+              <p className="text-sm text-purple-700 mb-3">
+                Describe what you want in natural language, and AI will handle the rest.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                <div className="p-2 bg-white rounded border border-purple-100">
+                  <strong>Example:</strong> "Get all product prices from amazon bestsellers"
+                </div>
+                <div className="p-2 bg-white rounded border border-purple-100">
+                  <strong>Example:</strong> "Find AI news on techcrunch and summarize"
+                </div>
+                <div className="p-2 bg-white rounded border border-purple-100">
+                  <strong>Example:</strong> "Map out the React documentation site"
+                </div>
+                <div className="p-2 bg-white rounded border border-purple-100">
+                  <strong>Example:</strong> "Extract all blog titles from medium.com"
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Main Input Panel */}
             <div className="lg:col-span-2 space-y-6">
               {/* URL Input */}
-              <Card>
+              <Card className={aiMode ? 'border-purple-200 shadow-lg' : ''}>
                 <CardContent className="p-6">
-                  <div className="flex justify-between items-center mb-2">
-                    <Label htmlFor="url" className="text-sm font-medium">
-                      {aiMode ? 'Describe what you want' : `URL to ${mode}`}
+                  <div className="flex justify-between items-center mb-3">
+                    <Label htmlFor="url" className={`text-sm font-medium ${aiMode ? 'text-purple-900' : ''}`}>
+                      {aiMode ? '🤖 Describe what you want to extract' : `URL to ${mode}`}
                     </Label>
                     <div className="flex items-center gap-2">
                       <Label htmlFor="ai-mode" className="text-xs text-gray-500">
-                        AI Mode
+                        {aiMode ? '✨ AI Mode Active' : 'Enable AI Mode'}
                       </Label>
                       <Switch
                         id="ai-mode"
                         checked={aiMode}
                         onCheckedChange={setAiMode}
+                        className={aiMode ? 'data-[state=checked]:bg-purple-600' : ''}
                       />
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Input
-                      id="url"
-                      placeholder={aiMode 
-                        ? "e.g., 'Get all product prices from amazon bestsellers' or 'Find AI news on techcrunch and summarize'"
-                        : "Enter URL or natural language (e.g., 'scrape nytimes.com as markdown')"
-                      }
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      className="flex-1"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !loading) {
-                          handleStart();
-                        }
-                      }}
-                    />
-                    <Button
-                      onClick={handleStart}
-                      disabled={loading || !url}
-                      className="bg-orange-500 hover:bg-orange-600 text-white min-w-[140px]"
-                    >
-                      {loading ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          {aiProcessing ? 'AI Processing' : 'Processing'}
-                        </>
-                      ) : (
-                        aiMode ? 'AI Extract' : config.action
-                      )}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-2">{config.description}</p>
+                  {aiMode ? (
+                    <>
+                      <div className="space-y-3">
+                        <textarea
+                          id="url"
+                          placeholder="Describe what you want to extract in plain English...
+
+Examples:
+• Get all product prices and reviews from amazon.com/bestsellers
+• Find recent articles about artificial intelligence on techcrunch
+• Extract all documentation pages from react.dev
+• Search for climate change news on nytimes and summarize each article
+• Crawl the first 10 pages of reddit.com/r/technology and get post titles"
+                          value={url}
+                          onChange={(e) => setUrl(e.target.value)}
+                          className="w-full min-h-[120px] p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && e.ctrlKey && !loading) {
+                              handleStart();
+                            }
+                          }}
+                        />
+                        <Button
+                          onClick={handleStart}
+                          disabled={loading || !url}
+                          className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white"
+                        >
+                          {loading ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              {aiProcessing ? '🤖 AI is analyzing your request...' : 'Processing...'}
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="mr-2 h-4 w-4" />
+                              Generate & Execute with AI
+                            </>
+                          )}
+                        </Button>
+                        <p className="text-xs text-gray-500">Press Ctrl+Enter to submit</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex gap-2">
+                        <Input
+                          id="url"
+                          placeholder="Enter URL (e.g., example.com)"
+                          value={url}
+                          onChange={(e) => setUrl(e.target.value)}
+                          className="flex-1"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !loading) {
+                              handleStart();
+                            }
+                          }}
+                        />
+                        <Button
+                          onClick={handleStart}
+                          disabled={loading || !url}
+                          className="bg-orange-500 hover:bg-orange-600 text-white min-w-[140px]"
+                        >
+                          {loading ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Processing
+                            </>
+                          ) : (
+                            config.action
+                          )}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-2">{config.description}</p>
+                    </>
+                  )}
                 </CardContent>
               </Card>
 
-              {/* Format Selector */}
-              <Card>
-                <CardContent className="p-6">
-                  <Label className="text-sm font-medium mb-3 block">Output Format</Label>
-                  <div className="grid grid-cols-3 gap-2">
+              {/* Format Selector - Hidden in AI Mode */}
+              {!aiMode && (
+                <Card>
+                  <CardContent className="p-6">
+                    <Label className="text-sm font-medium mb-3 block">Output Format</Label>
+                    <div className="grid grid-cols-3 gap-2">
                     {formatOptions.map((fmt) => (
                       <button
                         key={fmt.value}
@@ -661,6 +735,7 @@ function App() {
                   </div>
                 </CardContent>
               </Card>
+            )}
 
               {/* Result Display */}
               {activeJob && activeJob.result && (
