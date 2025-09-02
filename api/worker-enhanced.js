@@ -5297,21 +5297,46 @@ async function processWithPlanBasedSystem(content, params) {
           if (!item.name || seen.has(item.name)) return false;
           seen.add(item.name);
           
-          // Clean each item - extract name, title/role, bio properly
-          if (typeof item.name === 'string' && item.name.includes('\n')) {
-            const parts = item.name.split('\n').filter(p => p.trim());
-            item.name = parts[0] || '';
-            item.title = item.title || parts[1] || '';
-            item.bio = item.bio || parts.slice(2).join(' ') || '';
-          }
-          
-          // Clean up messy concatenated text in name field
-          if (item.name && item.name.length > 100) {
-            const nameMatch = item.name.match(/^([^A-Z]+)/);
-            if (nameMatch) {
-              const restText = item.name.substring(nameMatch[0].length);
-              item.name = nameMatch[1].trim();
-              item.bio = item.bio || restText;
+          // AGGRESSIVE PARSING: Name field contains everything concatenated
+          if (typeof item.name === 'string') {
+            const text = item.name;
+            
+            // Pattern 1: "FirstName LastNameTitle Rest of bio"
+            // Look for pattern like "Katrina BruinsExecutive Director"
+            const match1 = text.match(/^([A-Z][a-z]+ [A-Z][a-z]+)([A-Z][a-z]+(?: [A-Z][a-z]+)*)(.*)/s);
+            if (match1) {
+              item.name = match1[1].trim();
+              item.title = match1[2].trim();
+              item.bio = match1[3].trim();
+            } else {
+              // Pattern 2: Name might have line breaks or other separators
+              const lines = text.split(/[\n\t]+/).filter(l => l.trim());
+              if (lines.length >= 2) {
+                item.name = lines[0].trim();
+                item.title = lines[1].trim();
+                item.bio = lines.slice(2).join(' ').trim();
+              } else {
+                // Last resort: Find where lowercase meets uppercase (name boundary)
+                const boundary = text.search(/[a-z][A-Z]/);
+                if (boundary > 0 && boundary < 50) {
+                  item.name = text.substring(0, boundary + 1).trim();
+                  const rest = text.substring(boundary + 1);
+                  // Find next boundary for title
+                  const titleBoundary = rest.search(/[a-z][A-Z]/);
+                  if (titleBoundary > 0 && titleBoundary < 50) {
+                    item.title = rest.substring(0, titleBoundary + 1).trim();
+                    item.bio = rest.substring(titleBoundary + 1).trim();
+                  } else {
+                    item.title = rest.substring(0, 30).trim();
+                    item.bio = rest.substring(30).trim();
+                  }
+                }
+              }
+            }
+            
+            // Clean up title field
+            if (item.title) {
+              item.title = item.title.replace(/([a-z])([A-Z])/g, '$1 $2');
             }
           }
           
@@ -5340,8 +5365,38 @@ async function processWithPlanBasedSystem(content, params) {
         // If there's a 'people' or similar array field, extract just that
         const arrayFields = Object.keys(finalData).filter(key => 
           Array.isArray(finalData[key]) && 
-          (key === 'people' || key === 'items' || key === 'products' || key === 'articles' || key === 'events')
+          (key === 'people' || key === 'items' || key === 'products' || key === 'articles' || key === 'events' ||
+           key.startsWith('0') || key.startsWith('1')) // Handle numbered keys
         );
+        
+        // Also handle case where data is like {0: {...}, 1: {...}, ...}
+        const numberedKeys = Object.keys(finalData).filter(key => /^\d+$/.test(key));
+        if (numberedKeys.length > 0 && arrayFields.length === 0) {
+          // Convert numbered object to array
+          finalData = numberedKeys.map(key => finalData[key]);
+          
+          // Now process this array
+          const seen = new Set();
+          finalData = finalData.filter(item => {
+            if (!item) return false;
+            
+            // Parse concatenated name field
+            if (typeof item.name === 'string' && item.name.length > 50) {
+              const text = item.name;
+              const match = text.match(/^([A-Z][a-z]+ [A-Z][a-z]+)([A-Z][a-z]+(?: [A-Z][a-z]+)*)(.*)/s);
+              if (match) {
+                item.name = match[1].trim();
+                item.title = item.title || match[2].trim();
+                item.bio = item.bio || match[3].trim();
+              }
+            }
+            
+            const identifier = item.name || item.title || JSON.stringify(item);
+            if (seen.has(identifier)) return false;
+            seen.add(identifier);
+            return true;
+          });
+        }
         
         if (arrayFields.length === 1) {
           finalData = finalData[arrayFields[0]];
@@ -5361,8 +5416,8 @@ async function processWithPlanBasedSystem(content, params) {
     return {
       success: true,
       data: finalData,
-      clean: true, // Flag that this is simplified data
-      metadata: {
+      // CRITICAL: Do NOT return metadata if we have clean data
+      ...(Array.isArray(finalData) ? {} : { metadata: {
         strategy: plan.passes ? 'two_pass_extraction' : 'plan_based_extraction',
         plan_id: plan.task_id,
         skills_used: plan.passes 
@@ -5384,8 +5439,7 @@ async function processWithPlanBasedSystem(content, params) {
         audit_report: auditReport,
         // Active learning metadata
         learning_analysis: learningAnalysis
-      }
-    };
+      }})};
     
   } catch (error) {
     console.error('Plan-based extraction failed:', error);
