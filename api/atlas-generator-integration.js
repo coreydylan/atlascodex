@@ -3,34 +3,35 @@
  * Bridges the new skill-based system with existing Lambda infrastructure
  */
 
-const { createAtlasGenerator } = require('../packages/core/src/atlas-generator');
+// Import the new generator system - temporarily disabled until we can resolve ES6/CommonJS
+// const { createAtlasGenerator } = require('../packages/core/src/atlas-generator');
+
+// For now, import the enhanced rule-based processor (excluding processWithRules to avoid conflict)
+const { processWithAI } = require('./ai-processor');
 
 /**
  * Enhanced AI Processor using the new generator system
  */
 async function processWithGenerator(userInput, apiKey) {
   try {
-    // Create generator with AI capabilities if key available
-    const generator = createAtlasGenerator({
-      openai_api_key: apiKey,
-      use_ai_planner: !!apiKey,
-      max_time: 25000, // Leave buffer for Lambda timeout
-      max_requests: 8,
-      debug: true
-    });
+    // TODO: Enable once TypeScript/ES6 modules are resolved in Lambda
+    // For now, use the enhanced rule-based processor with better structured extraction
+    console.log('Using enhanced rule-based processing (Generator integration pending)');
     
-    // Parse the natural language input into a task
-    const task = parseInputToTask(userInput);
+    // Try AI first, fall back to enhanced rules
+    if (apiKey) {
+      try {
+        return await processWithAI(userInput, apiKey);
+      } catch (aiError) {
+        console.log('AI failed, using enhanced rules:', aiError.message);
+      }
+    }
     
-    // Execute extraction
-    const result = await generator.extract(task, { url: task.url });
-    
-    // Convert to legacy format for compatibility
-    return formatForLegacyApi(result, task);
+    return processWithRules(userInput);
     
   } catch (error) {
-    console.error('Generator processing failed:', error);
-    // Fall back to rule-based processing
+    console.error('Enhanced processing failed:', error);
+    // Final fallback to basic rules
     return processWithRules(userInput);
   }
 }

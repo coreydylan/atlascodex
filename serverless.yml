@@ -40,6 +40,14 @@ package:
 functions:
   api:
     handler: api/lambda.handler
+    package:
+      patterns:
+        - '!**'
+        - 'api/lambda.js'
+        - 'api/atlas-generator-integration.js'
+        - 'api/ai-processor.js'
+        - '!api/worker*.js'
+        - '!api/websocket*.js'
     events:
       - http:
           path: /{proxy+}

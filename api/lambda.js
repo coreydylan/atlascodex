@@ -1,7 +1,7 @@
 // Atlas Codex API Lambda Handler
 const { DynamoDBClient, PutItemCommand, GetItemCommand, ScanCommand } = require('@aws-sdk/client-dynamodb');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
-const { processNaturalLanguage } = require('./ai-processor');
+const { processNaturalLanguage } = require('./atlas-generator-integration');
 
 const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const sqs = new SQSClient({ region: process.env.AWS_REGION || 'us-west-2' });
