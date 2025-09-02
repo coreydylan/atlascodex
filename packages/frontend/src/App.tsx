@@ -62,6 +62,92 @@ interface Job {
   options?: any;
 }
 
+// Natural language parser
+function parseNaturalLanguage(input: string): { url?: string; mode?: Mode; format?: Format; params?: any } {
+  const result: any = { params: {} };
+  
+  // Common patterns
+  const patterns = {
+    // Commands: "scrape example.com as markdown"
+    scrapeCommand: /(?:scrape|extract|get|fetch)\s+(?:from\s+)?([^\s]+)(?:\s+as\s+(\w+))?/i,
+    // Search: "search for X on example.com"
+    searchCommand: /search\s+(?:for\s+)?["']?([^"']+)["']?\s+(?:on|in|from)\s+([^\s]+)/i,
+    // Crawl: "crawl example.com with 5 pages"
+    crawlCommand: /crawl\s+([^\s]+)(?:\s+(?:with|up\s+to)\s+(\d+)\s+pages?)?/i,
+    // Map: "map example.com"
+    mapCommand: /map\s+(?:out\s+)?([^\s]+)/i,
+    // Format hints
+    formatHint: /\b(markdown|html|json|links|screenshot|summary)\b/i,
+    // URL extraction
+    urlPattern: /(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+(?:\/[^\s]*)?)/
+  };
+  
+  // Try search pattern first
+  const searchMatch = input.match(patterns.searchCommand);
+  if (searchMatch) {
+    result.mode = 'search';
+    result.url = searchMatch[2];
+    result.params.searchQuery = searchMatch[1];
+    return result;
+  }
+  
+  // Try crawl pattern
+  const crawlMatch = input.match(patterns.crawlCommand);
+  if (crawlMatch) {
+    result.mode = 'crawl';
+    result.url = crawlMatch[1];
+    if (crawlMatch[2]) {
+      result.params.maxPages = parseInt(crawlMatch[2]);
+    }
+    return result;
+  }
+  
+  // Try map pattern
+  const mapMatch = input.match(patterns.mapCommand);
+  if (mapMatch) {
+    result.mode = 'map';
+    result.url = mapMatch[1];
+    return result;
+  }
+  
+  // Try scrape/extract pattern
+  const scrapeMatch = input.match(patterns.scrapeCommand);
+  if (scrapeMatch) {
+    result.mode = 'scrape';
+    result.url = scrapeMatch[1];
+    if (scrapeMatch[2]) {
+      result.format = scrapeMatch[2].toLowerCase() as Format;
+    }
+    return result;
+  }
+  
+  // Check for format hints
+  const formatMatch = input.match(patterns.formatHint);
+  if (formatMatch) {
+    result.format = formatMatch[1].toLowerCase() as Format;
+  }
+  
+  // Extract URL from anywhere in the text
+  const urlMatch = input.match(patterns.urlPattern);
+  if (urlMatch) {
+    result.url = urlMatch[0];
+    
+    // Guess mode based on keywords
+    if (input.includes('search')) result.mode = 'search';
+    else if (input.includes('crawl')) result.mode = 'crawl';
+    else if (input.includes('map')) result.mode = 'map';
+    else result.mode = 'scrape';
+  }
+  
+  // Handle simple URL input
+  if (!result.url && input.includes('.')) {
+    result.url = input.trim();
+    result.mode = 'scrape';
+  }
+  
+  return result;
+}
+
 function App() {
   const [mode, setMode] = useState<Mode>('scrape');
   const [url, setUrl] = useState('');
@@ -152,34 +238,73 @@ function App() {
     setActiveJob(newJob);
     
     try {
+      // Parse natural language input if it looks like a command
+      let processedUrl = fullUrl;
+      let extractedParams: any = {};
+      
+      // Check if input is natural language (doesn't start with http and contains spaces or commands)
+      if (!fullUrl.startsWith('http') && (fullUrl.includes(' ') || fullUrl.includes('scrape') || fullUrl.includes('extract'))) {
+        const nlpResult = parseNaturalLanguage(fullUrl);
+        if (nlpResult.url) {
+          processedUrl = nlpResult.url.startsWith('http') ? nlpResult.url : `https://${nlpResult.url}`;
+          extractedParams = nlpResult.params;
+          
+          // Update UI state based on parsed params
+          if (nlpResult.mode) setMode(nlpResult.mode);
+          if (nlpResult.format) setFormat(nlpResult.format);
+        }
+      }
+      
       // Use extract endpoint for all modes initially
       const endpoint = '/api/extract';
       
       const requestBody: any = {
-        url: fullUrl,
-        strategy: 'auto' // Let DIP system choose the best strategy
+        url: processedUrl,
+        strategy: 'auto', // Let DIP system choose the best strategy
+        type: mode,
+        ...extractedParams
       };
       
       // Add format-specific options
-      if (format === 'markdown') {
+      const formats = [];
+      if (format === 'markdown' || format === 'summary') {
+        formats.push('markdown');
         requestBody.includeMarkdown = true;
-      } else if (format === 'html') {
+      }
+      if (format === 'html') {
+        formats.push('html');
         requestBody.includeHtml = true;
-      } else if (format === 'links') {
+      }
+      if (format === 'links') {
+        formats.push('links');
         requestBody.includeLinks = true;
-      } else if (format === 'screenshot') {
+      }
+      if (format === 'screenshot') {
+        formats.push('screenshot');
         requestBody.includeScreenshot = true;
-      } else if (format === 'json') {
+      }
+      if (format === 'json') {
+        formats.push('json');
         requestBody.includeStructured = true;
       }
+      if (format === 'summary') {
+        formats.push('summary');
+      }
+      
+      requestBody.formats = formats.length > 0 ? formats : ['markdown'];
       
       // Add mode-specific options
       if (mode === 'crawl') {
+        requestBody.type = 'crawl';
         requestBody.maxPages = limit || 10;
         requestBody.includeSubdomains = includeSubdomains;
         requestBody.maxDepth = maxCrawlDepth;
       } else if (mode === 'search') {
-        requestBody.searchQuery = searchQuery;
+        requestBody.type = 'search';
+        requestBody.searchQuery = searchQuery || extractedParams.searchQuery;
+      } else if (mode === 'map') {
+        requestBody.type = 'map';
+        requestBody.includeSubdomains = includeSubdomains;
       }
       
       console.log('Sending extraction request:', requestBody);
@@ -421,7 +546,7 @@ function App() {
                   <div className="flex gap-2">
                     <Input
                       id="url"
-                      placeholder="example.com"
+                      placeholder="Enter URL or natural language (e.g., 'scrape nytimes.com as markdown' or 'search for AI on example.com')"
                       value={url}
                       onChange={(e) => setUrl(e.target.value)}
                       className="flex-1"

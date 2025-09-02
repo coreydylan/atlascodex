@@ -54,11 +54,11 @@ functions:
         Fn::Sub: "wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
   
   worker:
-    handler: api/worker-simple.handler
+    handler: api/worker-enhanced.handler
     package:
       patterns:
         - '!**'
-        - 'api/worker-simple.js'
+        - 'api/worker-enhanced.js'
     events:
       - sqs:
           arn:
