@@ -274,7 +274,96 @@ const FieldIcon = ({ fieldName, value }: { fieldName: string; value: any }) => {
   return <FileJson className="w-4 h-4" />;
 };
 
-// Dynamic data visualizer component
+// Enhanced dynamic data visualizer with AI optimization
+const EnhancedDataVisualizer = ({ data, optimization, onFeedback }: { data: any; optimization?: any; onFeedback?: () => void }) => {
+  if (!data) return null;
+  
+  // Apply display optimization if available
+  const displayType = optimization?.displayType || 'auto';
+  const primaryField = optimization?.primaryField;
+  const secondaryFields = optimization?.secondaryFields || [];
+  
+  // Render based on optimized display type
+  if (displayType === 'cards' || displayType === 'auto') {
+    return <DataVisualizer data={data} schema={null} />;
+  }
+  
+  if (displayType === 'table' && Array.isArray(data)) {
+    return (
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              {Object.keys(data[0] || {}).map(key => (
+                <th key={key} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  {key.replace(/_/g, ' ')}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {data.map((item, idx) => (
+              <tr key={idx}>
+                {Object.values(item).map((value: any, vIdx) => (
+                  <td key={vIdx} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+  
+  if (displayType === 'timeline' && Array.isArray(data)) {
+    return (
+      <div className="space-y-4">
+        {data.map((item, idx) => (
+          <div key={idx} className="flex gap-4">
+            <div className="flex-none">
+              <div className="w-3 h-3 bg-orange-500 rounded-full mt-1.5"></div>
+              {idx < data.length - 1 && (
+                <div className="w-0.5 h-16 bg-gray-300 ml-1.5 mt-1"></div>
+              )}
+            </div>
+            <div className="flex-1 pb-8">
+              <div className="bg-white p-4 rounded-lg border">
+                {Object.entries(item).map(([k, v]) => (
+                  <div key={k} className="mb-2">
+                    <span className="text-xs text-gray-500">{k}:</span>
+                    <span className="ml-2 text-sm">{String(v)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  
+  if (displayType === 'stats' && typeof data === 'object') {
+    return (
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+        {Object.entries(data).map(([key, value]) => (
+          <div key={key} className="bg-white p-4 rounded-lg border">
+            <div className="text-xs text-gray-500 uppercase">{key.replace(/_/g, ' ')}</div>
+            <div className="mt-1 text-2xl font-semibold text-gray-900">
+              {typeof value === 'number' ? value.toLocaleString() : String(value)}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  
+  // Fallback to original visualizer
+  return <DataVisualizer data={data} schema={null} />;
+};
+
+// Original dynamic data visualizer component
 const DataVisualizer = ({ data, schema }: { data: any; schema?: any }) => {
   if (!data) return null;
 
@@ -405,6 +494,11 @@ export default function ExtractorUI() {
   const [viewMode, setViewMode] = useState<'visual' | 'json' | 'table'>('visual');
   const [jobId, setJobId] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'presets' | 'custom' | 'generate'>('presets');
+  const [displayOptimization, setDisplayOptimization] = useState<any>(null);
+  const [isOptimizing, setIsOptimizing] = useState(false);
+  const [feedbackText, setFeedbackText] = useState('');
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [previousConfig, setPreviousConfig] = useState<any>(null);
 
   // Get current instructions and schema based on active tab
   const getCurrentConfig = () => {
@@ -583,6 +677,108 @@ export default function ExtractorUI() {
     }
   };
 
+  // Optimize display of results using AI
+  const optimizeDisplay = async (data: any) => {
+    setIsOptimizing(true);
+    
+    try {
+      const prompt = `Analyze this data and suggest the best way to display it visually:
+      ${JSON.stringify(data, null, 2).slice(0, 1000)}
+      
+      Return a display configuration with:
+      1. displayType: "cards" | "table" | "timeline" | "stats" | "list" | "grid"
+      2. primaryField: the main field to highlight
+      3. secondaryFields: supporting fields to show
+      4. groupBy: field to group by (if applicable)
+      5. sortBy: field to sort by
+      6. visualElements: icons, colors, badges to use
+      7. summary: key statistics to highlight`;
+
+      const response = await fetch(`${API_BASE}/api/ai/process`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123'
+        },
+        body: JSON.stringify({
+          prompt,
+          autoExecute: false
+        })
+      });
+
+      if (response.ok) {
+        const optimization = await response.json();
+        setDisplayOptimization(optimization);
+      }
+    } catch (err) {
+      console.error('Display optimization failed:', err);
+    } finally {
+      setIsOptimizing(false);
+    }
+  };
+
+  // Re-extract with feedback
+  const handleReExtractWithFeedback = async () => {
+    if (!feedbackText || !previousConfig) {
+      setError('Please provide feedback for improvement');
+      return;
+    }
+
+    setShowFeedback(false);
+    setIsExtracting(true);
+    setError('');
+    setResult(null);
+    setExtractionProgress({ status: 'starting', message: 'Re-extracting with your feedback...' });
+
+    try {
+      // Enhance instructions with feedback
+      const enhancedInstructions = `${previousConfig.instructions}
+
+      IMPORTANT USER FEEDBACK: ${feedbackText}
+      
+      Please adjust the extraction based on this feedback and ensure the output matches what the user expects.`;
+
+      const response = await fetch(`${API_BASE}/api/extract`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123'
+        },
+        body: JSON.stringify({
+          url: previousConfig.url,
+          extractionType: 'structured',
+          instructions: enhancedInstructions,
+          schema: previousConfig.schema,
+          formats: ['structured'],
+          previousAttempt: result,
+          userFeedback: feedbackText
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to start re-extraction: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.jobId) {
+        setJobId(data.jobId);
+        setExtractionProgress({ 
+          status: 'queued', 
+          message: 'Re-extraction job queued with feedback...',
+          jobId: data.jobId 
+        });
+        pollJobStatus(data.jobId);
+      }
+    } catch (err) {
+      console.error('Re-extraction error:', err);
+      setError(err.message || 'Failed to re-extract with feedback');
+      setIsExtracting(false);
+    }
+    
+    setFeedbackText('');
+  };
+
   // Poll job status
   const pollJobStatus = async (jobId: string) => {
     const maxAttempts = 60;
@@ -607,12 +803,24 @@ export default function ExtractorUI() {
         const data = await response.json();
         
         if (data.status === 'completed') {
-          setResult(data.result?.data || data.result);
+          const extractedData = data.result?.data || data.result;
+          setResult(extractedData);
           setIsExtracting(false);
           setExtractionProgress({
             status: 'completed',
             message: 'Extraction completed successfully!'
           });
+          
+          // Save config for potential re-extraction
+          setPreviousConfig({
+            url,
+            ...getCurrentConfig()
+          });
+          
+          // Automatically optimize display
+          if (extractedData) {
+            optimizeDisplay(extractedData);
+          }
         } else if (data.status === 'failed') {
           setError(data.error || 'Extraction failed');
           setIsExtracting(false);
@@ -1003,6 +1211,15 @@ export default function ExtractorUI() {
                       <Button
                         size="sm"
                         variant="outline"
+                        onClick={() => setShowFeedback(!showFeedback)}
+                        className="bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-300"
+                      >
+                        <MessageCircle className="w-4 h-4 mr-1" />
+                        Feedback
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
                         onClick={() => handleExport('json')}
                       >
                         <Download className="w-4 h-4 mr-1" />
@@ -1012,11 +1229,46 @@ export default function ExtractorUI() {
                   </div>
                 </CardHeader>
                 <CardContent className="flex-1 overflow-hidden">
+                  {/* Feedback Panel */}
+                  {showFeedback && (
+                    <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+                      <Label className="flex items-center gap-2 mb-2">
+                        <MessageCircle className="w-4 h-4 text-purple-600" />
+                        Not what you expected? Provide feedback for better results
+                      </Label>
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="E.g., 'Include phone numbers' or 'Group by department' or 'Extract only managers'..."
+                          value={feedbackText}
+                          onChange={(e) => setFeedbackText(e.target.value)}
+                          className="flex-1"
+                        />
+                        <Button
+                          onClick={handleReExtractWithFeedback}
+                          disabled={!feedbackText || isExtracting}
+                          className="bg-purple-600 hover:bg-purple-700 text-white"
+                        >
+                          <Target className="w-4 h-4 mr-1" />
+                          Re-Extract
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Display Optimization Status */}
+                  {isOptimizing && (
+                    <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+                      <span className="text-sm text-blue-700">Optimizing display format...</span>
+                    </div>
+                  )}
+                  
                   <ScrollArea className="h-full">
                     {viewMode === 'visual' && (
-                      <DataVisualizer 
+                      <EnhancedDataVisualizer 
                         data={result} 
-                        schema={getCurrentConfig().schema}
+                        optimization={displayOptimization}
+                        onFeedback={() => setShowFeedback(true)}
                       />
                     )}
                     
