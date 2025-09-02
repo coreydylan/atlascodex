@@ -291,16 +291,68 @@ function App() {
       let processedUrl = fullUrl;
       let extractedParams: any = {};
       
-      // Check if input is natural language (doesn't start with http and contains spaces or commands)
-      if (!fullUrl.startsWith('http') && (fullUrl.includes(' ') || fullUrl.includes('scrape') || fullUrl.includes('extract'))) {
-        const nlpResult = parseNaturalLanguage(fullUrl);
-        if (nlpResult.url) {
-          processedUrl = nlpResult.url.startsWith('http') ? nlpResult.url : `https://${nlpResult.url}`;
-          extractedParams = nlpResult.params;
+      // Check if we're in AI mode or input is natural language
+      if (isAiMode || (!fullUrl.startsWith('http') && (fullUrl.includes(' ') || fullUrl.includes('scrape') || fullUrl.includes('extract')))) {
+        // Call the AI processor endpoint for natural language processing
+        try {
+          const aiResponse = await fetch(`${API_BASE}/api/ai/process`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123',
+            },
+            body: JSON.stringify({
+              prompt: fullUrl,
+              autoExecute: false // Get the structured params but don't auto-execute
+            }),
+          });
           
-          // Update UI state based on parsed params
-          if (nlpResult.mode) setMode(nlpResult.mode);
-          if (nlpResult.format) setFormat(nlpResult.format);
+          if (aiResponse.ok) {
+            const aiResult = await aiResponse.json();
+            console.log('AI processing result:', aiResult);
+            
+            if (aiResult.url) {
+              processedUrl = aiResult.url;
+              extractedParams = aiResult.params || {};
+              
+              // Add formats from AI result
+              if (aiResult.formats) {
+                extractedParams.formats = aiResult.formats;
+              }
+              
+              // Update UI state based on AI result
+              if (aiResult.type) setMode(aiResult.type);
+              if (aiResult.formats && aiResult.formats.length > 0) {
+                // Map AI formats to UI format
+                const primaryFormat = aiResult.formats[0];
+                if (primaryFormat === 'structured') setFormat('json');
+                else setFormat(primaryFormat);
+              }
+            }
+          } else {
+            // Fall back to local parsing if AI fails
+            const nlpResult = parseNaturalLanguage(fullUrl);
+            if (nlpResult.url) {
+              processedUrl = nlpResult.url.startsWith('http') ? nlpResult.url : `https://${nlpResult.url}`;
+              extractedParams = nlpResult.params;
+              
+              // Update UI state based on parsed params
+              if (nlpResult.mode) setMode(nlpResult.mode);
+              if (nlpResult.format) setFormat(nlpResult.format);
+            }
+          }
+        } catch (aiError) {
+          console.error('AI processing failed, falling back to local parsing:', aiError);
+          // Fall back to local parsing
+          const nlpResult = parseNaturalLanguage(fullUrl);
+          if (nlpResult.url) {
+            processedUrl = nlpResult.url.startsWith('http') ? nlpResult.url : `https://${nlpResult.url}`;
+            extractedParams = nlpResult.params;
+            
+            // Update UI state based on parsed params
+            if (nlpResult.mode) setMode(nlpResult.mode);
+            if (nlpResult.format) setFormat(nlpResult.format);
+          }
         }
       }
       
@@ -311,36 +363,38 @@ function App() {
         url: processedUrl,
         strategy: 'auto', // Let DIP system choose the best strategy
         type: mode,
-        ...extractedParams
+        ...extractedParams // This now includes extractionInstructions, outputSchema, postProcessing from AI
       };
       
-      // Add format-specific options
-      const formats = [];
-      if (format === 'markdown' || format === 'summary') {
-        formats.push('markdown');
-        requestBody.includeMarkdown = true;
+      // Add format-specific options (only if not already set by AI)
+      if (!requestBody.formats || requestBody.formats.length === 0) {
+        const formats = [];
+        if (format === 'markdown' || format === 'summary') {
+          formats.push('markdown');
+          requestBody.includeMarkdown = true;
+        }
+        if (format === 'html') {
+          formats.push('html');
+          requestBody.includeHtml = true;
+        }
+        if (format === 'links') {
+          formats.push('links');
+          requestBody.includeLinks = true;
+        }
+        if (format === 'screenshot') {
+          formats.push('screenshot');
+          requestBody.includeScreenshot = true;
+        }
+        if (format === 'json') {
+          formats.push('json');
+          requestBody.includeStructured = true;
+        }
+        if (format === 'summary') {
+          formats.push('summary');
+        }
+        
+        requestBody.formats = formats.length > 0 ? formats : ['markdown'];
       }
-      if (format === 'html') {
-        formats.push('html');
-        requestBody.includeHtml = true;
-      }
-      if (format === 'links') {
-        formats.push('links');
-        requestBody.includeLinks = true;
-      }
-      if (format === 'screenshot') {
-        formats.push('screenshot');
-        requestBody.includeScreenshot = true;
-      }
-      if (format === 'json') {
-        formats.push('json');
-        requestBody.includeStructured = true;
-      }
-      if (format === 'summary') {
-        formats.push('summary');
-      }
-      
-      requestBody.formats = formats.length > 0 ? formats : ['markdown'];
       
       // Add mode-specific options
       if (mode === 'crawl') {
