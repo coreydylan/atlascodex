@@ -873,35 +873,56 @@ class PlanExecutor {
   // =============================================================================
   
   /**
-   * Weak supervision system using multiple labeling functions (LFs) 
+   * Weak supervision system using BlockClassifier with labeling functions 
    * to classify semantic blocks without manual labeling
    */
   applyWeakSupervision(semanticBlocks) {
     console.log('🏷️ Applying weak supervision to', semanticBlocks.length, 'blocks');
     
+    const blockClassifier = new BlockClassifier();
+    
     const labeledBlocks = semanticBlocks.map(block => {
-      const labels = this.applyLabelingFunctions(block);
-      const softLabel = this.combineLabelVotes(labels);
+      const classification = blockClassifier.classifyBlock(block, { 
+        pageContext: this.context.get('page_context') || {}
+      });
       
       return {
         ...block,
-        weak_labels: labels,
-        predicted_type: softLabel.type,
-        type_confidence: softLabel.confidence,
-        labeling_agreement: softLabel.agreement
+        predicted_type: classification.label,
+        type_confidence: classification.confidence,
+        labeling_votes: classification.votes || 0,
+        classification_evidence: classification.evidence,
+        all_scores: classification.allScores
       };
     });
     
-    // Filter by predicted type and confidence
+    // Use unified thresholds for filtering
+    const thresholds = this.getUnifiedThresholds();
+    
+    // Filter by predicted type and confidence  
     const profileBlocks = labeledBlocks.filter(block => 
       block.predicted_type === 'profile_card' && 
-      block.type_confidence >= 0.6
+      block.type_confidence >= thresholds.weak_supervision_min
     );
     
-    console.log(`🎯 Weak supervision filtered: ${semanticBlocks.length} → ${profileBlocks.length} profile candidates`);
-    console.log(`📊 Labeling agreement: ${profileBlocks.length > 0 ? (profileBlocks.reduce((sum, b) => sum + b.labeling_agreement, 0) / profileBlocks.length).toFixed(2) : 'N/A'}`);
+    // Also filter out navigation and board blocks using unified thresholds
+    const finalBlocks = labeledBlocks.filter(block => {
+      if (block.predicted_type === 'nav' && block.type_confidence > thresholds.nav_filter_threshold) {
+        console.log(`🚫 Filtering out nav block (conf=${block.type_confidence.toFixed(2)}): ${block.classification_evidence}`);
+        return false;
+      }
+      if (block.predicted_type === 'board_list' && block.type_confidence > thresholds.board_filter_threshold) {
+        console.log(`🚫 Filtering out board block (conf=${block.type_confidence.toFixed(2)}): ${block.classification_evidence}`);
+        return false;
+      }
+      // Keep profile cards and uncertain blocks for further processing
+      return block.predicted_type === 'profile_card' || block.type_confidence < thresholds.nav_filter_threshold;
+    });
     
-    return profileBlocks;
+    console.log(`🎯 Weak supervision filtered: ${semanticBlocks.length} → ${finalBlocks.length} candidates (${profileBlocks.length} high-confidence profiles)`);
+    console.log(`📊 Avg confidence: ${finalBlocks.length > 0 ? (finalBlocks.reduce((sum, b) => sum + b.type_confidence, 0) / finalBlocks.length).toFixed(2) : 'N/A'}`);
+    
+    return finalBlocks;
   }
   
   /**
@@ -1908,6 +1929,357 @@ class PlanExecutor {
   }
   
   // =============================================================================
+  // UNIFIED THRESHOLD MANAGEMENT SYSTEM
+  // Centralized threshold management from plan constraints - Phase 1.6
+  // =============================================================================
+
+  /**
+   * Get unified thresholds from plan constraints with fallback defaults
+   * Single source of truth for all quality thresholds throughout the system
+   */
+  getUnifiedThresholds() {
+    const plan = this.context.get('currentPlan') || {};
+    const constraints = plan.constraints || {};
+    
+    return {
+      // Core confidence thresholds
+      mapfields_conf_min: constraints.mapfields_conf_min || 0.35,
+      final_quality_min: constraints.final_quality_min || 0.45,
+      validation_threshold: constraints.validation_threshold || 0.4,
+      citation_confidence: constraints.citation_confidence || 0.3,
+      
+      // Block classification thresholds
+      weak_supervision_min: constraints.weak_supervision_min || 0.6,
+      nav_filter_threshold: constraints.nav_filter_threshold || 0.8,
+      board_filter_threshold: constraints.board_filter_threshold || 0.7,
+      
+      // Result limits
+      max_results: constraints.max_results || 50,
+      max_candidates: constraints.max_candidates || 15,
+      
+      // Quality and performance
+      quality_threshold: constraints.quality_threshold || 0.3,
+      confidence_calibration_min: constraints.confidence_calibration_min || 0.5
+    };
+  }
+
+  /**
+   * Update plan constraints with unified thresholds
+   */
+  updatePlanConstraints(overrides = {}) {
+    const plan = this.context.get('currentPlan') || {};
+    const currentThresholds = this.getUnifiedThresholds();
+    
+    plan.constraints = {
+      ...plan.constraints,
+      ...currentThresholds,
+      ...overrides
+    };
+    
+    this.context.set('currentPlan', plan);
+    console.log('📊 Updated unified thresholds:', plan.constraints);
+  }
+
+  // =============================================================================
+  // BLOCK CLASSIFIER & WEAK SUPERVISION SYSTEM
+  // Snorkel-style labeling functions for block classification without manual labels
+  // =============================================================================
+
+  /**
+   * Weak Supervision Block Classifier
+   * Uses multiple labeling functions to soft-label blocks without gold datasets
+   */
+  class BlockClassifier {
+    constructor() {
+      this.labelingFunctions = [
+        this.LF1_headingLooksLikeName,
+        this.LF2_siblingHasRoleWords,
+        this.LF3_highLinkDensity,
+        this.LF4_shortCommaLines,
+        this.LF5_hasPersonSchema,
+        this.LF6_profileKeywords,
+        this.LF7_boardPattern
+      ];
+    }
+
+    /**
+     * Classify a semantic block using weak supervision
+     */
+    classifyBlock(block, context = {}) {
+      const votes = {};
+      const evidence = {};
+      
+      // Apply each labeling function
+      this.labelingFunctions.forEach(lf => {
+        const result = lf.call(this, block, context);
+        if (result.label && result.confidence > 0.1) {
+          if (!votes[result.label]) votes[result.label] = [];
+          votes[result.label].push({
+            confidence: result.confidence,
+            evidence: result.evidence,
+            function: lf.name
+          });
+          evidence[lf.name] = result.evidence;
+        }
+      });
+
+      // Combine votes using confidence-weighted majority
+      return this.combineVotes(votes, evidence);
+    }
+
+    /**
+     * LF1: Heading looks like a person name → vote profile_card
+     */
+    LF1_headingLooksLikeName(block, context) {
+      if (!block.heading) return { label: null, confidence: 0 };
+      
+      const heading = block.heading.trim();
+      const hasPersonName = this.looksLikePersonName(heading);
+      
+      if (hasPersonName) {
+        return {
+          label: 'profile_card',
+          confidence: 0.8,
+          evidence: `heading "${heading}" looks like person name`
+        };
+      }
+      
+      return { label: null, confidence: 0 };
+    }
+
+    /**
+     * LF2: Sibling elements contain role words → vote profile_card  
+     */
+    LF2_siblingHasRoleWords(block, context) {
+      if (!block.element) return { label: null, confidence: 0 };
+      
+      const roleWords = ['director', 'manager', 'executive', 'assistant', 'coordinator', 
+                        'specialist', 'analyst', 'officer', 'president', 'vice', 'chief',
+                        'senior', 'junior', 'lead', 'head', 'supervisor', 'administrator'];
+      
+      const siblingText = block.element.siblings().text().toLowerCase();
+      const blockText = block.element.text().toLowerCase();
+      const combinedText = siblingText + ' ' + blockText;
+      
+      const roleMatches = roleWords.filter(word => combinedText.includes(word));
+      
+      if (roleMatches.length > 0) {
+        return {
+          label: 'profile_card',
+          confidence: Math.min(0.7, 0.3 + roleMatches.length * 0.1),
+          evidence: `contains role words: ${roleMatches.join(', ')}`
+        };
+      }
+      
+      return { label: null, confidence: 0 };
+    }
+
+    /**
+     * LF3: High link density → vote nav
+     */
+    LF3_highLinkDensity(block, context) {
+      if (!block.element) return { label: null, confidence: 0 };
+      
+      const links = block.element.find('a');
+      const textLength = block.element.text().length;
+      const linkDensity = textLength > 0 ? (links.length * 20) / textLength : 0;
+      
+      if (linkDensity > 0.15) {
+        return {
+          label: 'nav',
+          confidence: Math.min(0.9, 0.5 + linkDensity * 2),
+          evidence: `high link density: ${linkDensity.toFixed(3)} (${links.length} links, ${textLength} chars)`
+        };
+      }
+      
+      return { label: null, confidence: 0 };
+    }
+
+    /**
+     * LF4: Short comma-separated lines → vote board_list
+     */
+    LF4_shortCommaLines(block, context) {
+      if (!block.element) return { label: null, confidence: 0 };
+      
+      const text = block.element.text();
+      const lines = text.split('\n').filter(line => line.trim().length > 5);
+      
+      if (lines.length < 3) return { label: null, confidence: 0 };
+      
+      let commaLineCount = 0;
+      let shortLineCount = 0;
+      
+      lines.forEach(line => {
+        line = line.trim();
+        if (line.includes(',')) commaLineCount++;
+        if (line.length < 80) shortLineCount++;
+      });
+      
+      const commaRatio = commaLineCount / lines.length;
+      const shortRatio = shortLineCount / lines.length;
+      
+      if (commaRatio > 0.6 && shortRatio > 0.7) {
+        return {
+          label: 'board_list',
+          confidence: 0.8,
+          evidence: `${lines.length} lines, ${(commaRatio * 100).toFixed(0)}% have commas, ${(shortRatio * 100).toFixed(0)}% are short`
+        };
+      }
+      
+      return { label: null, confidence: 0 };
+    }
+
+    /**
+     * LF5: Has Person schema markup → vote profile_card
+     */
+    LF5_hasPersonSchema(block, context) {
+      if (!block.element) return { label: null, confidence: 0 };
+      
+      const hasPersonSchema = block.element.find('[itemtype*="Person"], [typeof*="Person"]').length > 0;
+      const hasPersonClass = block.element.attr('class')?.toLowerCase().includes('person') || 
+                           block.element.find('[class*="person"], [class*="staff"], [class*="team"]').length > 0;
+      
+      if (hasPersonSchema) {
+        return {
+          label: 'profile_card',
+          confidence: 0.9,
+          evidence: 'has Person schema markup'
+        };
+      }
+      
+      if (hasPersonClass) {
+        return {
+          label: 'profile_card', 
+          confidence: 0.6,
+          evidence: 'has person-related CSS classes'
+        };
+      }
+      
+      return { label: null, confidence: 0 };
+    }
+
+    /**
+     * LF6: Contains profile keywords → vote profile_card
+     */
+    LF6_profileKeywords(block, context) {
+      if (!block.element) return { label: null, confidence: 0 };
+      
+      const profileKeywords = ['bio', 'biography', 'about', 'experience', 'background', 
+                              'education', 'graduated', 'university', 'degree', 'joined',
+                              'email', '@', 'phone', 'linkedin', 'twitter'];
+      
+      const blockText = block.element.text().toLowerCase();
+      const matches = profileKeywords.filter(keyword => blockText.includes(keyword));
+      
+      if (matches.length >= 2) {
+        return {
+          label: 'profile_card',
+          confidence: Math.min(0.7, 0.3 + matches.length * 0.08),
+          evidence: `contains profile keywords: ${matches.join(', ')}`
+        };
+      }
+      
+      return { label: null, confidence: 0 };
+    }
+
+    /**
+     * LF7: Under "Board" heading → vote board_list
+     */
+    LF7_boardPattern(block, context) {
+      if (!block.element) return { label: null, confidence: 0 };
+      
+      const parentText = block.element.parent().text().toLowerCase();
+      const siblingText = block.element.siblings().text().toLowerCase();
+      const contextText = parentText + ' ' + siblingText;
+      
+      const boardPatterns = ['board of directors', 'board members', 'board of trustees', 
+                           'advisory board', 'governing board', 'trustees'];
+      
+      const hasBoardContext = boardPatterns.some(pattern => contextText.includes(pattern));
+      
+      if (hasBoardContext) {
+        return {
+          label: 'board_list',
+          confidence: 0.85,
+          evidence: 'appears under board/trustees heading context'
+        };
+      }
+      
+      return { label: null, confidence: 0 };
+    }
+
+    /**
+     * Combine labeling function votes using confidence weighting
+     */
+    combineVotes(votes, evidence) {
+      if (Object.keys(votes).length === 0) {
+        return {
+          label: 'other',
+          confidence: 0.1,
+          evidence: 'no labeling functions matched'
+        };
+      }
+
+      // Calculate weighted confidence for each label
+      const labelScores = {};
+      Object.entries(votes).forEach(([label, labelVotes]) => {
+        const totalConfidence = labelVotes.reduce((sum, vote) => sum + vote.confidence, 0);
+        const avgConfidence = totalConfidence / labelVotes.length;
+        const voteStrength = labelVotes.length; // More functions agreeing = higher strength
+        
+        labelScores[label] = {
+          score: avgConfidence * (1 + voteStrength * 0.1), // Bonus for agreement
+          votes: labelVotes.length,
+          avgConfidence: avgConfidence,
+          evidence: labelVotes.map(v => v.evidence).join('; ')
+        };
+      });
+
+      // Pick highest scoring label
+      const bestLabel = Object.entries(labelScores)
+        .sort(([,a], [,b]) => b.score - a.score)[0];
+
+      return {
+        label: bestLabel[0],
+        confidence: Math.min(0.95, bestLabel[1].score),
+        votes: bestLabel[1].votes,
+        evidence: bestLabel[1].evidence,
+        allScores: labelScores
+      };
+    }
+
+    /**
+     * Helper: Check if text looks like a person name
+     */
+    looksLikePersonName(text) {
+      if (!text || text.length < 2) return false;
+      
+      // Clean and check
+      const cleaned = text.trim();
+      const words = cleaned.split(/\s+/);
+      
+      // Must have at least 2 words
+      if (words.length < 2) return false;
+      
+      // No more than 5 words (likely not a name)
+      if (words.length > 5) return false;
+      
+      // Each word should start with capital letter
+      const allCapitalized = words.every(word => /^[A-Z]/.test(word));
+      if (!allCapitalized) return false;
+      
+      // Should not contain numbers or special characters (except common name chars)
+      if (/[0-9@#$%^&*()_+=\[\]{}|\\:";'<>?\/]/.test(cleaned)) return false;
+      
+      // Should not be common non-name phrases
+      const nonNamePhrases = ['STAFF', 'TEAM', 'ABOUT US', 'CONTACT', 'HOME', 'BOARD'];
+      if (nonNamePhrases.includes(cleaned.toUpperCase())) return false;
+      
+      return true;
+    }
+  }
+
+  // =============================================================================
   // DOMAIN-AGNOSTIC VALIDATORS - Quality checks with repair triggers
   // =============================================================================
   
@@ -2284,14 +2656,20 @@ class PlanExecutor {
     });
   }
   
+  /**
+   * Generate selector-based citations with DOM paths - Phase 1.7
+   * Format: {selector, startOffset?, endOffset?, content_hash}
+   */
   generateCitations(mapping, html, contentBlocks) {
     const citations = {};
+    const $ = this.context.get('dom_structure')?.$ || cheerio.load(html);
+    const thresholds = this.getUnifiedThresholds();
     
     // Generate citations for each field
     for (const [field, value] of Object.entries(mapping)) {
       if (value && typeof value === 'string') {
-        const citation = this.findSourceInContent(value, html, contentBlocks);
-        if (citation) {
+        const citation = this.createSelectorBasedCitation(value, field, $, thresholds.citation_confidence);
+        if (citation && citation.confidence >= thresholds.citation_confidence) {
           citations[field] = citation;
         }
       }
@@ -2303,17 +2681,188 @@ class PlanExecutor {
     };
   }
   
+  /**
+   * Create selector-based citation for extracted field value
+   */
+  createSelectorBasedCitation(value, fieldName, $, minConfidence = 0.3) {
+    if (!value || value.length < 3) return null;
+    
+    // Clean value for matching
+    const cleanValue = value.trim().substring(0, 100);
+    const valueWords = cleanValue.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    
+    if (valueWords.length === 0) return null;
+    
+    let bestMatch = null;
+    let bestScore = 0;
+    
+    // Search through DOM elements
+    $('*').each((index, element) => {
+      const $el = $(element);
+      const elementText = $el.text().trim();
+      
+      if (elementText.length < 3) return;
+      
+      // Calculate match score
+      const score = this.calculateTextMatch(cleanValue, elementText, valueWords);
+      
+      if (score > bestScore && score >= minConfidence) {
+        bestScore = score;
+        
+        // Generate CSS selector path for this element
+        const selector = this.generateCSSSelector($el, $);
+        
+        // Find exact position within element text
+        const position = this.findTextPosition(cleanValue, elementText);
+        
+        bestMatch = {
+          selector: selector,
+          confidence: Math.min(0.95, score),
+          content_hash: this.hashContent(elementText),
+          field_name: fieldName,
+          extracted_value: cleanValue,
+          source_text_length: elementText.length,
+          startOffset: position.start,
+          endOffset: position.end,
+          element_tag: element.tagName?.toLowerCase() || 'unknown',
+          element_classes: $el.attr('class')?.split(/\s+/) || [],
+          parent_selector: this.generateCSSSelector($el.parent(), $, 1)
+        };
+      }
+    });
+    
+    return bestMatch;
+  }
+  
+  /**
+   * Calculate text matching score between extracted value and source element
+   */
+  calculateTextMatch(cleanValue, elementText, valueWords) {
+    const elementLower = elementText.toLowerCase();
+    
+    // Exact match gets highest score
+    if (elementText.includes(cleanValue)) {
+      return 0.95;
+    }
+    
+    // Partial word overlap
+    let matchedWords = 0;
+    valueWords.forEach(word => {
+      if (elementLower.includes(word)) {
+        matchedWords++;
+      }
+    });
+    
+    const wordMatchRatio = matchedWords / valueWords.length;
+    
+    // Length similarity bonus
+    const lengthRatio = Math.min(cleanValue.length, elementText.length) / 
+                       Math.max(cleanValue.length, elementText.length);
+    
+    return (wordMatchRatio * 0.8) + (lengthRatio * 0.2);
+  }
+  
+  /**
+   * Generate CSS selector path for element
+   */
+  generateCSSSelector($element, $, maxDepth = 3) {
+    if (!$element.length) return '';
+    
+    const path = [];
+    let current = $element;
+    let depth = 0;
+    
+    while (current.length && current[0].tagName && depth < maxDepth) {
+      let selector = current[0].tagName.toLowerCase();
+      
+      // Add ID if available
+      const id = current.attr('id');
+      if (id) {
+        selector += `#${id}`;
+        path.unshift(selector);
+        break; // ID is unique, stop here
+      }
+      
+      // Add classes if available
+      const classes = current.attr('class');
+      if (classes) {
+        const classList = classes.split(/\s+/).filter(c => c.length > 0);
+        if (classList.length > 0) {
+          selector += '.' + classList.slice(0, 2).join('.');
+        }
+      }
+      
+      // Add nth-child for specificity
+      const siblings = current.siblings(current[0].tagName.toLowerCase());
+      if (siblings.length > 0) {
+        const index = siblings.index(current[0]) + 1;
+        selector += `:nth-child(${index + 1})`;
+      }
+      
+      path.unshift(selector);
+      current = current.parent();
+      depth++;
+    }
+    
+    return path.join(' > ');
+  }
+  
+  /**
+   * Find start/end position of text within source element
+   */
+  findTextPosition(needle, haystack) {
+    const startPos = haystack.indexOf(needle);
+    if (startPos === -1) {
+      // Try word-by-word matching for fuzzy position
+      const needleWords = needle.split(/\s+/);
+      const firstWordPos = haystack.indexOf(needleWords[0]);
+      if (firstWordPos !== -1) {
+        return {
+          start: firstWordPos,
+          end: firstWordPos + needle.length,
+          fuzzy: true
+        };
+      }
+      return { start: 0, end: needle.length, fuzzy: true };
+    }
+    
+    return {
+      start: startPos,
+      end: startPos + needle.length,
+      fuzzy: false
+    };
+  }
+  
+  /**
+   * Create content hash for detecting selector drift
+   */
+  hashContent(content) {
+    // Simple hash for content fingerprinting
+    let hash = 0;
+    const str = content.substring(0, 200); // First 200 chars
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return hash.toString(16);
+  }
+  
+  /**
+   * Legacy method for fallback compatibility
+   */
   findSourceInContent(value, html, contentBlocks) {
-    // Find where this value appears in the source content
-    const cleanValue = value.substring(0, 50); // First 50 chars for matching
+    // Fallback to old system if selector-based fails
+    const cleanValue = value.substring(0, 50);
     
     for (let i = 0; i < contentBlocks.length; i++) {
       if (contentBlocks[i].includes(cleanValue)) {
         return {
           source: 'content_block',
           block_index: i,
-          confidence: 0.8,
-          evidence: cleanValue
+          confidence: 0.6,
+          evidence: cleanValue,
+          legacy: true
         };
       }
     }
