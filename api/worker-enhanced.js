@@ -5073,9 +5073,16 @@ async function processWithPlanBasedSystem(content, params) {
     console.log(`📊 Audit report: ${auditReport.session_summary.total_decisions} decisions, ${auditReport.filtering_audit.total_steps} filtering steps`);
     console.log(`🎓 Learning value: ${learningAnalysis.learning_value_score.toFixed(2)} (${learningAnalysis.queue_status.total_queued} cases queued)`);
     
+    // Enforce schema compliance if provided
+    let finalData = executionResult.data;
+    if (targetSchema) {
+      finalData = enforceSchemaCompliance(finalData, targetSchema);
+      console.log('📋 Schema enforcement applied to extraction results');
+    }
+    
     return {
       success: true,
-      data: executionResult.data,
+      data: finalData,
       metadata: {
         strategy: plan.passes ? 'two_pass_extraction' : 'plan_based_extraction',
         plan_id: plan.task_id,
@@ -5107,6 +5114,89 @@ async function processWithPlanBasedSystem(content, params) {
       success: false,
       error: error.message
     };
+  }
+}
+
+// Enforce schema compliance on extracted data
+function enforceSchemaCompliance(data, schema) {
+  if (!schema || !schema.properties) return data;
+  
+  // Handle array of items
+  if (Array.isArray(data)) {
+    if (schema.type === 'array' && schema.items) {
+      return data.map(item => enforceSchemaCompliance(item, schema.items));
+    }
+    // If data is array but schema expects object with array property
+    if (schema.type === 'object') {
+      // Try to find an array property in schema
+      for (const [key, prop] of Object.entries(schema.properties)) {
+        if (prop.type === 'array') {
+          return enforceSchemaCompliance({ [key]: data }, schema);
+        }
+      }
+    }
+  }
+  
+  const result = {};
+  
+  // Process each property defined in schema
+  for (const [key, prop] of Object.entries(schema.properties)) {
+    // Check if data has this property
+    if (data && data.hasOwnProperty(key)) {
+      result[key] = validateAndConvertType(data[key], prop);
+    } else if (prop.default !== undefined) {
+      result[key] = prop.default;
+    } else if (schema.required && schema.required.includes(key)) {
+      // Required field is missing, add appropriate default
+      result[key] = getDefaultForType(prop.type);
+    }
+  }
+  
+  return result;
+}
+
+function validateAndConvertType(value, propSchema) {
+  const type = propSchema.type;
+  
+  switch(type) {
+    case 'string':
+      return value != null ? String(value) : '';
+    case 'number':
+    case 'integer':
+      const num = Number(value);
+      return isNaN(num) ? 0 : num;
+    case 'boolean':
+      return Boolean(value);
+    case 'array':
+      if (Array.isArray(value)) {
+        if (propSchema.items) {
+          return value.map(item => validateAndConvertType(item, propSchema.items));
+        }
+        return value;
+      }
+      return [];
+    case 'object':
+      if (typeof value === 'object' && value !== null) {
+        if (propSchema.properties) {
+          return enforceSchemaCompliance(value, propSchema);
+        }
+        return value;
+      }
+      return {};
+    default:
+      return value;
+  }
+}
+
+function getDefaultForType(type) {
+  switch(type) {
+    case 'string': return '';
+    case 'number':
+    case 'integer': return 0;
+    case 'boolean': return false;
+    case 'array': return [];
+    case 'object': return {};
+    default: return null;
   }
 }
 

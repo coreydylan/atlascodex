@@ -67,8 +67,18 @@ import {
   Box,
   Folder,
   MessageCircle,
-  Edit
+  Edit,
+  Palette,
+  Wand2,
+  Save,
+  Upload,
+  Monitor,
+  Smartphone,
+  Tablet,
+  X
 } from 'lucide-react';
+import TemplateGenerator from './components/TemplateGenerator';
+import TemplateRenderer from './components/TemplateRenderer';
 
 const API_BASE = process.env.REACT_APP_API_URL || 'https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev';
 
@@ -491,7 +501,11 @@ export default function ExtractorUI() {
   const [extractionProgress, setExtractionProgress] = useState<any>(null);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string>('');
-  const [viewMode, setViewMode] = useState<'visual' | 'json' | 'table'>('visual');
+  const [viewMode, setViewMode] = useState<'visual' | 'json' | 'table' | 'template'>('visual');
+  const [currentTemplate, setCurrentTemplate] = useState(null);
+  const [savedTemplates, setSavedTemplates] = useState([]);
+  const [showTemplateEditor, setShowTemplateEditor] = useState(false);
+  const [templateGenerated, setTemplateGenerated] = useState(false);
   const [jobId, setJobId] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'presets' | 'custom' | 'generate'>('presets');
   const [displayOptimization, setDisplayOptimization] = useState<any>(null);
@@ -836,6 +850,10 @@ Return the final JSON schema.`;
       
       setGeneratedInstructions(instructions);
       setGeneratedSchema(JSON.stringify(schema, null, 2));
+      
+      // Also generate an initial template for this schema
+      generateTemplateForSchema(schema);
+      
       setIsGenerating(false);
       
     } catch (err) {
@@ -843,6 +861,93 @@ Return the final JSON schema.`;
       setError(err.message || 'Failed to generate configuration');
       setIsGenerating(false);
     }
+  };
+
+  // Generate template from schema
+  const generateTemplateForSchema = (schema: any) => {
+    if (!schema || !schema.properties) return;
+
+    const fields = Object.entries(schema.properties).map(([key, prop]: [string, any], index) => {
+      const fieldType = prop.type || 'text';
+      const isArray = fieldType === 'array';
+      const isObject = fieldType === 'object';
+      
+      // Determine optimal display type based on field name and type
+      let display = 'text';
+      const keyLower = key.toLowerCase();
+      
+      if (keyLower.includes('email')) display = 'link';
+      else if (keyLower.includes('url') || keyLower.includes('link')) display = 'link';
+      else if (keyLower.includes('image') || keyLower.includes('photo')) display = 'image';
+      else if (keyLower.includes('date') || keyLower.includes('time')) display = 'date';
+      else if (keyLower.includes('price') || keyLower.includes('cost')) display = 'currency';
+      else if (keyLower.includes('rating') || keyLower.includes('score')) display = 'rating';
+      else if (keyLower.includes('tag') || keyLower.includes('category')) display = 'badge';
+      else if (isArray) display = 'list';
+      else if (isObject) display = 'card';
+      
+      return {
+        id: `field_${key}_${index}`,
+        name: key,
+        type: fieldType,
+        display,
+        size: isObject || isArray ? 'large' : 'medium',
+        position: {
+          x: (index % 3) * 33.33,
+          y: Math.floor(index / 3) * 60,
+          width: 30,
+          height: isObject ? 100 : 50
+        },
+        style: {
+          color: '#374151',
+          fontSize: '0.875rem',
+          padding: '0.5rem'
+        },
+        required: schema.required?.includes(key) || false
+      };
+    });
+
+    const template = {
+      id: `template_${Date.now()}`,
+      name: `Template for ${naturalLanguageInput.slice(0, 50)}...`,
+      description: 'Auto-generated from schema',
+      layout: fields.length > 10 ? 'table' : fields.some(f => f.type === 'object') ? 'card' : 'grid',
+      fields,
+      styles: {
+        container: {
+          padding: '1.5rem',
+          backgroundColor: '#ffffff',
+          borderRadius: '0.75rem',
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+        },
+        header: {
+          fontSize: '1.5rem',
+          fontWeight: '700',
+          marginBottom: '1.5rem',
+          color: '#1f2937',
+          textAlign: 'center'
+        },
+        content: {
+          display: 'grid',
+          gap: '1.5rem'
+        },
+        footer: {
+          marginTop: '2rem',
+          padding: '1rem 0',
+          borderTop: '1px solid #e5e7eb',
+          textAlign: 'center',
+          fontSize: '0.875rem',
+          color: '#6b7280'
+        }
+      },
+      responsive: true,
+      animations: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    setCurrentTemplate(template);
+    setTemplateGenerated(true);
   };
 
   // Revise schema based on user feedback
@@ -892,6 +997,47 @@ Return the revised JSON schema.`;
     }
   };
 
+  // Generate template for extracted data
+  const generateTemplateForData = async (data: any) => {
+    const config = getCurrentConfig();
+    if (!config.schema) return;
+
+    try {
+      // For now, generate a simple local template as AI endpoint might not exist
+      const template = {
+        id: `template_${Date.now()}`,
+        name: 'Auto-generated Template',
+        description: 'Generated from extracted data',
+        layout: 'card',
+        fields: Object.keys(config.schema.properties || {}).map((key, index) => ({
+          id: `field_${key}_${index}`,
+          name: key,
+          type: 'text',
+          display: 'text',
+          size: 'medium',
+          position: { x: 0, y: index * 50, width: 100, height: 40 },
+          style: { color: '#374151', fontSize: '0.875rem' },
+          required: config.schema.required?.includes(key) || false
+        })),
+        styles: {
+          container: { padding: '1rem', backgroundColor: '#ffffff' },
+          header: { fontSize: '1.25rem', fontWeight: '600' },
+          content: { display: 'grid', gap: '1rem' },
+          footer: { marginTop: '1rem' }
+        },
+        responsive: true,
+        animations: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      setCurrentTemplate(template);
+      setTemplateGenerated(true);
+    } catch (err) {
+      console.error('Template generation failed:', err);
+    }
+  };
+
   // Optimize display of results using AI
   const optimizeDisplay = async (data: any) => {
     setIsOptimizing(true);
@@ -932,6 +1078,31 @@ Return the revised JSON schema.`;
     }
   };
 
+  // Handle template changes
+  const handleTemplateChange = (template: any) => {
+    setCurrentTemplate(template);
+  };
+
+  // Save template
+  const handleSaveTemplate = (template: any) => {
+    const updatedTemplates = [...savedTemplates, template];
+    setSavedTemplates(updatedTemplates);
+    // Save to localStorage
+    localStorage.setItem('extractorTemplates', JSON.stringify(updatedTemplates));
+  };
+
+  // Load saved templates on mount
+  React.useEffect(() => {
+    try {
+      const saved = localStorage.getItem('extractorTemplates');
+      if (saved) {
+        setSavedTemplates(JSON.parse(saved));
+      }
+    } catch (error) {
+      console.error('Failed to load saved templates:', error);
+    }
+  }, []);
+
   // Re-extract with feedback
   const handleReExtractWithFeedback = async () => {
     if (!feedbackText || !previousConfig) {
@@ -951,7 +1122,10 @@ Return the revised JSON schema.`;
 
       IMPORTANT USER FEEDBACK: ${feedbackText}
       
-      Please adjust the extraction based on this feedback and ensure the output matches what the user expects.`;
+      Please adjust the extraction based on this feedback and ensure the output matches what the user expects.
+      
+      CRITICAL: The output MUST follow the provided JSON schema exactly. Do not return raw text or unstructured data.
+      Format all extracted data according to the schema structure.`;
 
       const response = await fetch(`${API_BASE}/api/extract`, {
         method: 'POST',
@@ -963,8 +1137,11 @@ Return the revised JSON schema.`;
           url: previousConfig.url,
           extractionType: 'structured',
           instructions: enhancedInstructions,
+          outputSchema: previousConfig.schema,
           schema: previousConfig.schema,
           formats: ['structured'],
+          enforceSchema: true,
+          validateOutput: true,
           previousAttempt: result,
           userFeedback: feedbackText
         })
@@ -1036,6 +1213,11 @@ Return the revised JSON schema.`;
           if (extractedData) {
             optimizeDisplay(extractedData);
           }
+          
+          // Generate template if not already generated
+          if (extractedData && !templateGenerated) {
+            generateTemplateForData(extractedData);
+          }
         } else if (data.status === 'failed') {
           setError(data.error || 'Extraction failed');
           setIsExtracting(false);
@@ -1088,8 +1270,11 @@ Return the revised JSON schema.`;
           url,
           extractionType: 'structured',
           instructions: config.instructions,
-          schema: config.schema,
-          formats: ['structured']
+          outputSchema: config.schema, // Use outputSchema instead of schema
+          schema: config.schema, // Keep both for compatibility
+          formats: ['structured'],
+          enforceSchema: true, // Ensure backend follows the schema strictly
+          validateOutput: true // Validate output against schema
         })
       });
 
@@ -1292,6 +1477,30 @@ Return the revised JSON schema.`;
                           </div>
                         </div>
                         
+                        {currentTemplate && (
+                          <div>
+                            <Label className="text-xs text-gray-500">Generated Visual Template</Label>
+                            <div className="mt-1 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-sm font-medium text-purple-900">{currentTemplate.name}</span>
+                                <Badge variant="outline" className="text-purple-700 border-purple-300">
+                                  {currentTemplate.layout} • {currentTemplate.fields.length} fields
+                                </Badge>
+                              </div>
+                              <p className="text-xs text-purple-600 mb-2">{currentTemplate.description}</p>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setShowTemplateEditor(true)}
+                                className="text-purple-700 border-purple-300 hover:bg-purple-100"
+                              >
+                                <Edit className="w-3 h-3 mr-1" />
+                                Customize Template
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        
                         <div>
                           <div className="flex items-center justify-between mb-1">
                             <Label className="text-xs text-gray-500">Generated Schema</Label>
@@ -1467,6 +1676,14 @@ Return the revised JSON schema.`;
                         </Button>
                         <Button
                           size="sm"
+                          variant={viewMode === 'template' ? 'default' : 'ghost'}
+                          onClick={() => setViewMode('template')}
+                          disabled={!currentTemplate}
+                        >
+                          <Layout className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          size="sm"
                           variant={viewMode === 'json' ? 'default' : 'ghost'}
                           onClick={() => setViewMode('json')}
                         >
@@ -1480,6 +1697,15 @@ Return the revised JSON schema.`;
                           <Table className="w-4 h-4" />
                         </Button>
                       </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setShowTemplateEditor(!showTemplateEditor)}
+                        className="bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-300"
+                      >
+                        <Palette className="w-4 h-4 mr-1" />
+                        Template
+                      </Button>
                       <Button
                         size="sm"
                         variant="outline"
@@ -1544,6 +1770,31 @@ Return the revised JSON schema.`;
                       />
                     )}
                     
+                    {viewMode === 'template' && currentTemplate && (
+                      <TemplateRenderer
+                        template={currentTemplate}
+                        data={result}
+                        interactive={true}
+                        showStats={true}
+                        onItemClick={(item, index) => {
+                          console.log('Item clicked:', item, index);
+                        }}
+                      />
+                    )}
+                    
+                    {viewMode === 'template' && !currentTemplate && (
+                      <div className="flex items-center justify-center h-full">
+                        <div className="text-center">
+                          <Layout className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                          <p className="text-gray-500 mb-4">No template available</p>
+                          <Button onClick={() => setShowTemplateEditor(true)}>
+                            <Wand2 className="w-4 h-4 mr-2" />
+                            Create Template
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    
                     {viewMode === 'json' && (
                       <pre className="text-xs font-mono bg-gray-50 p-4 rounded-lg overflow-x-auto">
                         {JSON.stringify(result, null, 2)}
@@ -1562,6 +1813,36 @@ Return the revised JSON schema.`;
           </div>
         </div>
       </div>
+      
+      {/* Template Editor Modal */}
+      {showTemplateEditor && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-7xl h-[90vh] overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Palette className="w-5 h-5" />
+                Visual Template Editor
+              </h2>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowTemplateEditor(false)}
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <div className="p-4 h-full overflow-auto">
+              <TemplateGenerator
+                schema={getCurrentConfig().schema}
+                data={result}
+                onTemplateChange={handleTemplateChange}
+                onSaveTemplate={handleSaveTemplate}
+                savedTemplates={savedTemplates}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
