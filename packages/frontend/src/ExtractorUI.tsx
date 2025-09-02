@@ -530,146 +530,142 @@ export default function ExtractorUI() {
     setError('');
 
     try {
-      // Create a prompt that will generate both instructions and schema
-      const prompt = `Generate extraction configuration for: "${naturalLanguageInput}"
-      
-      I need:
-      1. Clear extraction instructions
-      2. A JSON schema for the output structure
-      
-      Make the extraction comprehensive and well-structured.`;
-
-      const response = await fetch(`${API_BASE}/api/ai/process`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123'
-        },
-        body: JSON.stringify({
-          prompt: naturalLanguageInput,
-          autoExecute: false
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to generate configuration');
-      }
-
-      const data = await response.json();
-      
-      // Extract instructions and schema from AI response
+      // Parse the natural language to extract key concepts
+      const lowerInput = naturalLanguageInput.toLowerCase();
       let instructions = '';
       let schema = {};
+      
+      // Generate detailed instructions based on the input
+      instructions = `Extract the following information as requested: ${naturalLanguageInput}. 
+      Be comprehensive and include all relevant details, relationships, and metadata.
+      Ensure the extraction is complete and well-structured.`;
 
-      // Parse the AI response to get structured extraction params
-      if (data.params) {
-        instructions = data.params.extractionInstructions || 
-                      data.params.instructions || 
-                      `Extract ${naturalLanguageInput}`;
-        
-        schema = data.params.outputSchema || 
-                data.params.schema || 
-                {
-                  type: 'object',
-                  properties: {
-                    data: {
-                      type: 'array',
-                      items: { type: 'object' }
-                    }
-                  }
-                };
-      } else {
-        // Fallback: generate basic instructions and schema from the input
-        instructions = `Extract comprehensive information about: ${naturalLanguageInput}. Include all relevant details, relationships, and metadata.`;
-        
-        // Try to infer a basic schema structure
-        const lowerInput = naturalLanguageInput.toLowerCase();
-        
-        if (lowerInput.includes('people') || lowerInput.includes('person') || lowerInput.includes('staff')) {
-          schema = {
-            type: 'object',
-            properties: {
-              people: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    name: { type: 'string' },
-                    role: { type: 'string' },
-                    details: { type: 'string' }
-                  }
-                }
-              }
-            }
-          };
-        } else if (lowerInput.includes('product') || lowerInput.includes('item')) {
-          schema = {
-            type: 'object',
-            properties: {
-              products: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    name: { type: 'string' },
-                    description: { type: 'string' },
-                    price: { type: 'string' },
-                    details: { type: 'object' }
-                  }
-                }
-              }
-            }
-          };
-        } else if (lowerInput.includes('article') || lowerInput.includes('blog') || lowerInput.includes('post')) {
-          schema = {
-            type: 'object',
-            properties: {
-              articles: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    title: { type: 'string' },
-                    author: { type: 'string' },
-                    date: { type: 'string' },
-                    content: { type: 'string' }
-                  }
-                }
-              }
-            }
-          };
-        } else {
-          // Generic schema for any data
-          schema = {
-            type: 'object',
-            properties: {
-              items: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    id: { type: 'string' },
-                    title: { type: 'string' },
-                    description: { type: 'string' },
-                    metadata: { type: 'object' }
-                  }
-                }
-              },
-              summary: {
-                type: 'object',
-                properties: {
-                  total_count: { type: 'number' },
-                  categories: { type: 'array', items: { type: 'string' } }
-                }
-              }
-            }
-          };
+      // Analyze the input to build a smart schema
+      const words = lowerInput.split(/\s+/);
+      const fields = [];
+      
+      // Common field patterns to detect
+      const fieldPatterns = {
+        'name': ['name', 'names', 'title', 'titles', 'called', 'named'],
+        'email': ['email', 'emails', 'e-mail', 'mail', 'contact'],
+        'phone': ['phone', 'phones', 'number', 'mobile', 'cell', 'telephone'],
+        'address': ['address', 'addresses', 'location', 'locations', 'place'],
+        'role': ['role', 'roles', 'position', 'positions', 'title', 'job', 'designation'],
+        'department': ['department', 'departments', 'team', 'teams', 'division', 'group'],
+        'bio': ['bio', 'biography', 'about', 'description', 'profile', 'background', 'story'],
+        'date': ['date', 'dates', 'time', 'when', 'schedule', 'deadline', 'due'],
+        'price': ['price', 'prices', 'cost', 'costs', 'fee', 'amount', 'pricing', 'rate'],
+        'description': ['description', 'describe', 'details', 'summary', 'overview', 'info'],
+        'url': ['url', 'link', 'links', 'website', 'site', 'webpage'],
+        'image': ['image', 'images', 'photo', 'photos', 'picture', 'pictures', 'pic'],
+        'category': ['category', 'categories', 'type', 'types', 'kind', 'class', 'group'],
+        'status': ['status', 'state', 'condition', 'availability', 'active'],
+        'id': ['id', 'identifier', 'code', 'reference', 'number'],
+        'rating': ['rating', 'ratings', 'score', 'scores', 'review', 'rank'],
+        'tags': ['tag', 'tags', 'label', 'labels', 'keyword', 'keywords'],
+        'count': ['count', 'total', 'number', 'quantity', 'amount'],
+        'features': ['feature', 'features', 'capability', 'capabilities', 'specification'],
+        'author': ['author', 'authors', 'writer', 'created by', 'by', 'publisher']
+      };
+
+      // Detect which fields are mentioned
+      const detectedFields = {};
+      for (const [field, patterns] of Object.entries(fieldPatterns)) {
+        if (patterns.some(pattern => lowerInput.includes(pattern))) {
+          detectedFields[field] = { type: 'string' };
+          if (field === 'rating' || field === 'count') {
+            detectedFields[field] = { type: 'number' };
+          }
+          if (field === 'tags' || field === 'features') {
+            detectedFields[field] = { type: 'array', items: { type: 'string' } };
+          }
         }
       }
 
+      // Determine the main entity type
+      let entityName = 'items';
+      let entitySingular = 'item';
+      
+      if (lowerInput.includes('people') || lowerInput.includes('person') || lowerInput.includes('staff') || lowerInput.includes('team') || lowerInput.includes('member')) {
+        entityName = 'people';
+        entitySingular = 'person';
+        // Add common people fields
+        if (!detectedFields.name) detectedFields.name = { type: 'string' };
+        if (!detectedFields.role && !detectedFields.title) detectedFields.role = { type: 'string' };
+      } else if (lowerInput.includes('product') || lowerInput.includes('item') || lowerInput.includes('service')) {
+        entityName = 'products';
+        entitySingular = 'product';
+        if (!detectedFields.name) detectedFields.name = { type: 'string' };
+        if (!detectedFields.price) detectedFields.price = { type: 'string' };
+        if (!detectedFields.description) detectedFields.description = { type: 'string' };
+      } else if (lowerInput.includes('article') || lowerInput.includes('post') || lowerInput.includes('blog') || lowerInput.includes('news')) {
+        entityName = 'articles';
+        entitySingular = 'article';
+        if (!detectedFields.title) detectedFields.title = { type: 'string' };
+        if (!detectedFields.author) detectedFields.author = { type: 'string' };
+        if (!detectedFields.date) detectedFields.date = { type: 'string' };
+        if (!detectedFields.content) detectedFields.content = { type: 'string' };
+      } else if (lowerInput.includes('event') || lowerInput.includes('meeting') || lowerInput.includes('conference')) {
+        entityName = 'events';
+        entitySingular = 'event';
+        if (!detectedFields.name) detectedFields.name = { type: 'string' };
+        if (!detectedFields.date) detectedFields.date = { type: 'string' };
+        if (!detectedFields.location) detectedFields.location = { type: 'string' };
+      } else if (lowerInput.includes('compan') || lowerInput.includes('organization') || lowerInput.includes('business')) {
+        entityName = 'companies';
+        entitySingular = 'company';
+        if (!detectedFields.name) detectedFields.name = { type: 'string' };
+        if (!detectedFields.industry) detectedFields.industry = { type: 'string' };
+        if (!detectedFields.website) detectedFields.website = { type: 'string' };
+      }
+
+      // If no specific fields detected, add generic ones
+      if (Object.keys(detectedFields).length === 0) {
+        detectedFields.name = { type: 'string' };
+        detectedFields.description = { type: 'string' };
+        detectedFields.details = { type: 'object' };
+      }
+
+      // Build the schema
+      schema = {
+        type: 'object',
+        properties: {
+          [entityName]: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: detectedFields
+            }
+          },
+          total_count: { type: 'number' },
+          extraction_metadata: {
+            type: 'object',
+            properties: {
+              extracted_at: { type: 'string' },
+              source_url: { type: 'string' }
+            }
+          }
+        }
+      };
+
+      // Check if we should just get a summary instead of list
+      if (lowerInput.includes('summary') || lowerInput.includes('overview') || lowerInput.includes('statistics')) {
+        schema = {
+          type: 'object',
+          properties: {
+            summary: { type: 'string' },
+            key_points: { type: 'array', items: { type: 'string' } },
+            statistics: { type: 'object' },
+            ...detectedFields
+          }
+        };
+      }
+
+      // Don't make API call if we can generate locally
       setGeneratedInstructions(instructions);
       setGeneratedSchema(JSON.stringify(schema, null, 2));
       setIsGenerating(false);
+      
     } catch (err) {
       console.error('Generation error:', err);
       setError(err.message || 'Failed to generate configuration');
