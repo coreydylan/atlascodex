@@ -5284,9 +5284,26 @@ async function processWithPlanBasedSystem(content, params) {
       console.log('✅ Data transformation complete - matches schema perfectly');
     }
     
+    // SIMPLIFY: Return ONLY the data the user asked for, no metadata
+    if (finalData && typeof finalData === 'object') {
+      // Remove all metadata fields
+      delete finalData.extractionNote;
+      delete finalData.instructions;
+      delete finalData.postProcessing;
+      delete finalData.metadata;
+      delete finalData.extraction_metadata;
+      
+      // If there's a single array property that matches the main request, return just that
+      const props = Object.keys(finalData);
+      if (props.length === 1 && Array.isArray(finalData[props[0]])) {
+        finalData = finalData[props[0]];
+      }
+    }
+    
     return {
       success: true,
       data: finalData,
+      clean: true, // Flag that this is simplified data
       metadata: {
         strategy: plan.passes ? 'two_pass_extraction' : 'plan_based_extraction',
         plan_id: plan.task_id,

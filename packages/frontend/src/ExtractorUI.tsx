@@ -79,6 +79,7 @@ import {
 } from 'lucide-react';
 import TemplateGenerator from './components/TemplateGenerator';
 import TemplateRenderer from './components/TemplateRenderer';
+import SimpleDataDisplay from './components/SimpleDataDisplay';
 
 const API_BASE = process.env.REACT_APP_API_URL || 'https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev';
 
@@ -501,7 +502,7 @@ export default function ExtractorUI() {
   const [extractionProgress, setExtractionProgress] = useState<any>(null);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string>('');
-  const [viewMode, setViewMode] = useState<'visual' | 'json' | 'table' | 'template'>('visual');
+  const [viewMode, setViewMode] = useState<'cards' | 'table' | 'list' | 'json'>('cards');
   const [currentTemplate, setCurrentTemplate] = useState(null);
   const [savedTemplates, setSavedTemplates] = useState([]);
   const [showTemplateEditor, setShowTemplateEditor] = useState(false);
@@ -700,10 +701,8 @@ Return the final JSON schema.`;
       let instructions = '';
       let schema = {};
       
-      // Generate detailed instructions based on the input
-      instructions = `Extract the following information as requested: ${naturalLanguageInput}. 
-      Be comprehensive and include all relevant details, relationships, and metadata.
-      Ensure the extraction is complete and well-structured.`;
+      // Simple, clear instructions
+      instructions = `Extract exactly: ${naturalLanguageInput}. Return ONLY the requested fields, nothing else.`;
 
       // Analyze the input to build a smart schema
       const words = lowerInput.split(/\s+/);
@@ -1664,64 +1663,52 @@ Return the revised JSON schema.`;
                     <CardTitle className="flex items-center gap-2">
                       <Database className="w-5 h-5" />
                       Extracted Data
+                      {Array.isArray(result) && (
+                        <Badge variant="secondary">{result.length} items</Badge>
+                      )}
                     </CardTitle>
                     <div className="flex items-center gap-2">
+                      {/* Simple view switcher */}
                       <div className="flex gap-1 p-1 bg-gray-100 rounded-lg">
                         <Button
                           size="sm"
-                          variant={viewMode === 'visual' ? 'default' : 'ghost'}
-                          onClick={() => setViewMode('visual')}
+                          variant={viewMode === 'cards' ? 'default' : 'ghost'}
+                          onClick={() => setViewMode('cards')}
+                          title="Card View"
                         >
-                          <Eye className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant={viewMode === 'template' ? 'default' : 'ghost'}
-                          onClick={() => setViewMode('template')}
-                          disabled={!currentTemplate}
-                        >
-                          <Layout className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant={viewMode === 'json' ? 'default' : 'ghost'}
-                          onClick={() => setViewMode('json')}
-                        >
-                          <Code className="w-4 h-4" />
+                          <Grid3x3 className="w-4 h-4" />
                         </Button>
                         <Button
                           size="sm"
                           variant={viewMode === 'table' ? 'default' : 'ghost'}
                           onClick={() => setViewMode('table')}
+                          title="Table View"
                         >
                           <Table className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={viewMode === 'list' ? 'default' : 'ghost'}
+                          onClick={() => setViewMode('list')}
+                          title="List View"
+                        >
+                          <List className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={viewMode === 'json' ? 'default' : 'ghost'}
+                          onClick={() => setViewMode('json')}
+                          title="Raw JSON"
+                        >
+                          <Code className="w-4 h-4" />
                         </Button>
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => setShowTemplateEditor(!showTemplateEditor)}
-                        className="bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-300"
-                      >
-                        <Palette className="w-4 h-4 mr-1" />
-                        Template
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setShowFeedback(!showFeedback)}
-                        className="bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-300"
-                      >
-                        <MessageCircle className="w-4 h-4 mr-1" />
-                        Feedback
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
                         onClick={() => handleExport('json')}
                       >
-                        <Download className="w-4 h-4 mr-1" />
-                        Export
+                        <Download className="w-4 h-4" />
                       </Button>
                     </div>
                   </div>
@@ -1762,49 +1749,15 @@ Return the revised JSON schema.`;
                   )}
                   
                   <ScrollArea className="h-full">
-                    {viewMode === 'visual' && (
-                      <EnhancedDataVisualizer 
-                        data={result} 
-                        optimization={displayOptimization}
-                        onFeedback={() => setShowFeedback(true)}
-                      />
-                    )}
-                    
-                    {viewMode === 'template' && currentTemplate && (
-                      <TemplateRenderer
-                        template={currentTemplate}
-                        data={result}
-                        interactive={true}
-                        showStats={true}
-                        onItemClick={(item, index) => {
-                          console.log('Item clicked:', item, index);
-                        }}
-                      />
-                    )}
-                    
-                    {viewMode === 'template' && !currentTemplate && (
-                      <div className="flex items-center justify-center h-full">
-                        <div className="text-center">
-                          <Layout className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                          <p className="text-gray-500 mb-4">No template available</p>
-                          <Button onClick={() => setShowTemplateEditor(true)}>
-                            <Wand2 className="w-4 h-4 mr-2" />
-                            Create Template
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {viewMode === 'json' && (
+                    {viewMode === 'json' ? (
                       <pre className="text-xs font-mono bg-gray-50 p-4 rounded-lg overflow-x-auto">
                         {JSON.stringify(result, null, 2)}
                       </pre>
-                    )}
-                    
-                    {viewMode === 'table' && (
-                      <div className="text-sm text-gray-600">
-                        Table view available for array data
-                      </div>
+                    ) : (
+                      <SimpleDataDisplay 
+                        data={result} 
+                        viewMode={viewMode as 'cards' | 'table' | 'list'}
+                      />
                     )}
                   </ScrollArea>
                 </CardContent>
