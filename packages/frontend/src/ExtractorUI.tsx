@@ -499,6 +499,9 @@ export default function ExtractorUI() {
   const [feedbackText, setFeedbackText] = useState('');
   const [showFeedback, setShowFeedback] = useState(false);
   const [previousConfig, setPreviousConfig] = useState<any>(null);
+  const [agentProposals, setAgentProposals] = useState<any[]>([]);
+  const [showAgentDetails, setShowAgentDetails] = useState(false);
+  const [schemaFeedback, setSchemaFeedback] = useState('');
 
   // Get current instructions and schema based on active tab
   const getCurrentConfig = () => {
@@ -519,19 +522,167 @@ export default function ExtractorUI() {
     };
   };
 
-  // Generate extraction config from natural language
-  const handleGenerate = async () => {
-    if (!naturalLanguageInput) {
-      setError('Please describe what you want to extract');
-      return;
+  // Multi-agent schema generation system
+  const generateSchemaWithAgents = async (userRequest: string) => {
+    // Define nano-agents with different perspectives
+    const nanoAgents = [
+      {
+        name: 'DataStructureAgent',
+        role: 'Focuses on optimal data organization and relationships',
+        prompt: `Given the user wants to extract: "${userRequest}"
+        
+        Design a JSON schema focusing on:
+        1. Hierarchical data relationships
+        2. Proper nesting and grouping
+        3. Array vs object decisions
+        4. Data normalization
+        
+        Think about how the data relates to each other and what structure would be most useful.`
+      },
+      {
+        name: 'FieldDiscoveryAgent', 
+        role: 'Discovers all possible relevant fields',
+        prompt: `Given the user wants to extract: "${userRequest}"
+        
+        Identify ALL possible fields that might be relevant, including:
+        1. Explicitly mentioned fields
+        2. Commonly associated fields (e.g., if they want names, they might also want titles)
+        3. Metadata fields (dates, IDs, sources)
+        4. Relationship fields (parent/child, categories)
+        5. Computed fields (counts, summaries)
+        
+        Be creative and think about what additional data would be valuable.`
+      },
+      {
+        name: 'ContextAnalyzerAgent',
+        role: 'Understands domain context and industry standards',
+        prompt: `Given the user wants to extract: "${userRequest}"
+        
+        Analyze the context and domain to suggest:
+        1. Industry-standard field names
+        2. Common patterns for this type of data
+        3. Expected data types and formats
+        4. Validation rules and constraints
+        5. Missing context that should be captured
+        
+        Consider what professional systems would capture for this data.`
+      },
+      {
+        name: 'UserIntentAgent',
+        role: 'Interprets what the user really needs',
+        prompt: `Given the user wants to extract: "${userRequest}"
+        
+        Interpret the user's true intent:
+        1. What problem are they trying to solve?
+        2. How will they likely use this data?
+        3. What format would be most convenient?
+        4. What aggregations or summaries would help?
+        5. What filtering or sorting might they need?
+        
+        Think beyond the literal request to what would be most helpful.`
+      },
+      {
+        name: 'EdgeCaseAgent',
+        role: 'Handles special cases and variations',
+        prompt: `Given the user wants to extract: "${userRequest}"
+        
+        Consider edge cases and variations:
+        1. Optional vs required fields
+        2. Fields that might have multiple values
+        3. Alternative data representations
+        4. Handling missing or null data
+        5. Accommodating different formats of the same data
+        
+        Make the schema flexible enough to handle real-world messiness.`
+      }
+    ];
+
+    // Collect proposals from all nano-agents
+    const proposals = [];
+    
+    // Run agents in parallel for speed
+    const agentPromises = nanoAgents.map(async (agent) => {
+      try {
+        const response = await fetch(`${API_BASE}/api/ai/process`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123'
+          },
+          body: JSON.stringify({
+            prompt: agent.prompt + '\n\nReturn a JSON schema proposal.',
+            autoExecute: false
+          })
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          return {
+            agent: agent.name,
+            role: agent.role,
+            schema: result.params?.outputSchema || result.params?.schema || null
+          };
+        }
+      } catch (err) {
+        console.log(`Agent ${agent.name} failed, using fallback`);
+      }
+      return null;
+    });
+
+    const agentResults = await Promise.all(agentPromises);
+    const validProposals = agentResults.filter(p => p && p.schema);
+    
+    // Save proposals for UI display
+    setAgentProposals(validProposals);
+
+    // If we have proposals, synthesize them
+    if (validProposals.length > 0) {
+      // Judge agent synthesizes all proposals
+      const judgePrompt = `You are a Judge Agent that must synthesize multiple schema proposals into one optimal schema.
+
+User Request: "${userRequest}"
+
+Agent Proposals:
+${validProposals.map(p => `${p.agent} (${p.role}):\n${JSON.stringify(p.schema, null, 2)}`).join('\n\n')}
+
+Synthesize these proposals into a single, optimal JSON schema that:
+1. Incorporates the best ideas from each agent
+2. Resolves any conflicts intelligently
+3. Maintains consistency and usability
+4. Is comprehensive but not overly complex
+5. Includes helpful metadata and structure
+
+Return the final JSON schema.`;
+
+      try {
+        const judgeResponse = await fetch(`${API_BASE}/api/ai/process`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123'
+          },
+          body: JSON.stringify({
+            prompt: judgePrompt,
+            autoExecute: false
+          })
+        });
+
+        if (judgeResponse.ok) {
+          const judgeResult = await judgeResponse.json();
+          return judgeResult.params?.outputSchema || judgeResult.params?.schema || generateLocalSchema(userRequest);
+        }
+      } catch (err) {
+        console.error('Judge agent failed:', err);
+      }
     }
 
-    setIsGenerating(true);
-    setError('');
+    // Fallback to intelligent local generation if agents fail
+    return generateLocalSchema(userRequest);
+  };
 
-    try {
-      // Parse the natural language to extract key concepts
-      const lowerInput = naturalLanguageInput.toLowerCase();
+  // Local schema generation as fallback
+  const generateLocalSchema = (userRequest: string) => {
+    const lowerInput = userRequest.toLowerCase();
       let instructions = '';
       let schema = {};
       
@@ -661,7 +812,28 @@ export default function ExtractorUI() {
         };
       }
 
-      // Don't make API call if we can generate locally
+      return schema;
+  };
+
+  // Generate extraction config from natural language
+  const handleGenerate = async () => {
+    if (!naturalLanguageInput) {
+      setError('Please describe what you want to extract');
+      return;
+    }
+
+    setIsGenerating(true);
+    setError('');
+    
+    try {
+      // Generate comprehensive instructions
+      const instructions = `Extract the following information as requested: ${naturalLanguageInput}. 
+      Be comprehensive and include all relevant details, relationships, and metadata.
+      Ensure the extraction is complete and well-structured.`;
+      
+      // Use multi-agent system to generate schema
+      const schema = await generateSchemaWithAgents(naturalLanguageInput);
+      
       setGeneratedInstructions(instructions);
       setGeneratedSchema(JSON.stringify(schema, null, 2));
       setIsGenerating(false);
@@ -669,6 +841,53 @@ export default function ExtractorUI() {
     } catch (err) {
       console.error('Generation error:', err);
       setError(err.message || 'Failed to generate configuration');
+      setIsGenerating(false);
+    }
+  };
+
+  // Revise schema based on user feedback
+  const handleReviseSchema = async () => {
+    if (!schemaFeedback || !generatedSchema) {
+      setError('Please provide feedback for schema revision');
+      return;
+    }
+
+    setIsGenerating(true);
+    setError('');
+
+    try {
+      const revisionPrompt = `Current schema:
+${generatedSchema}
+
+User feedback: "${schemaFeedback}"
+
+Please revise the schema based on this feedback. Make the requested changes while maintaining schema validity and consistency.
+
+Return the revised JSON schema.`;
+
+      const response = await fetch(`${API_BASE}/api/ai/process`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123'
+        },
+        body: JSON.stringify({
+          prompt: revisionPrompt,
+          autoExecute: false
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        const revisedSchema = result.params?.outputSchema || result.params?.schema || JSON.parse(generatedSchema);
+        setGeneratedSchema(JSON.stringify(revisedSchema, null, 2));
+        setSchemaFeedback('');
+        setError('');
+      }
+    } catch (err) {
+      console.error('Schema revision error:', err);
+      setError('Failed to revise schema');
+    } finally {
       setIsGenerating(false);
     }
   };
@@ -1074,10 +1293,67 @@ export default function ExtractorUI() {
                         </div>
                         
                         <div>
-                          <Label className="text-xs text-gray-500">Generated Schema</Label>
+                          <div className="flex items-center justify-between mb-1">
+                            <Label className="text-xs text-gray-500">Generated Schema</Label>
+                            {agentProposals.length > 0 && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setShowAgentDetails(!showAgentDetails)}
+                                className="text-xs text-purple-600 hover:text-purple-700"
+                              >
+                                <Users className="w-3 h-3 mr-1" />
+                                {showAgentDetails ? 'Hide' : 'Show'} Agent Proposals ({agentProposals.length})
+                              </Button>
+                            )}
+                          </div>
+                          
+                          {/* Show agent proposals if requested */}
+                          {showAgentDetails && agentProposals.length > 0 && (
+                            <div className="mb-3 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                              <Label className="text-xs text-purple-700 mb-2 block">AI Agent Proposals:</Label>
+                              <div className="space-y-2 max-h-48 overflow-y-auto">
+                                {agentProposals.map((proposal, idx) => (
+                                  <div key={idx} className="p-2 bg-white rounded border border-purple-100">
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <Brain className="w-3 h-3 text-purple-600" />
+                                      <span className="text-xs font-medium text-purple-900">{proposal.agent}</span>
+                                    </div>
+                                    <p className="text-xs text-gray-600">{proposal.role}</p>
+                                  </div>
+                                ))}
+                              </div>
+                              <p className="text-xs text-purple-600 mt-2">
+                                ✨ These proposals were synthesized by the Judge Agent into the final schema below
+                              </p>
+                            </div>
+                          )}
+                          
                           <pre className="mt-1 p-3 bg-gray-50 border rounded-lg text-xs font-mono overflow-x-auto">
                             {generatedSchema}
                           </pre>
+                          
+                          {/* Schema revision feedback */}
+                          <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                            <Label className="text-xs text-blue-700 mb-2 block">Want to refine the schema?</Label>
+                            <div className="flex gap-2">
+                              <Input
+                                placeholder="E.g., 'Add a field for social media links' or 'Make email optional'"
+                                value={schemaFeedback}
+                                onChange={(e) => setSchemaFeedback(e.target.value)}
+                                className="flex-1 text-sm"
+                              />
+                              <Button
+                                size="sm"
+                                onClick={handleReviseSchema}
+                                disabled={!schemaFeedback || isGenerating}
+                                className="bg-blue-600 hover:bg-blue-700 text-white"
+                              >
+                                <Target className="w-3 h-3 mr-1" />
+                                Revise
+                              </Button>
+                            </div>
+                          </div>
                         </div>
                         
                         <div className="flex gap-2">
