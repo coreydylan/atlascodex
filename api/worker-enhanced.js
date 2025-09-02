@@ -140,6 +140,313 @@ const SKILLS_REGISTRY = {
 };
 
 /**
+ * Block Classifier using Snorkel-style weak supervision
+ * Uses multiple labeling functions to soft-label blocks without gold datasets
+ */
+class BlockClassifier {
+  constructor() {
+    this.labelingFunctions = [
+      this.LF1_headingLooksLikeName,
+      this.LF2_siblingHasRoleWords,
+      this.LF3_highLinkDensity,
+      this.LF4_shortCommaLines,
+      this.LF5_hasPersonSchema,
+      this.LF6_profileKeywords,
+      this.LF7_boardPattern
+    ];
+  }
+
+  /**
+   * Classify a semantic block using weak supervision
+   */
+  classifyBlock(block, context = {}) {
+    const votes = {};
+    const evidence = {};
+    
+    // Apply each labeling function
+    this.labelingFunctions.forEach(lf => {
+      const result = lf.call(this, block, context);
+      if (result.label && result.confidence > 0.1) {
+        if (!votes[result.label]) votes[result.label] = [];
+        votes[result.label].push({
+          confidence: result.confidence,
+          evidence: result.reason,
+          function: lf.name
+        });
+        evidence[lf.name] = result.reason;
+      }
+    });
+
+    // Combine votes using confidence-weighted majority
+    return this.combineVotes(votes, evidence);
+  }
+
+  /**
+   * Combine labeling function votes using confidence weighting
+   */
+  combineVotes(votes, evidence) {
+    if (Object.keys(votes).length === 0) {
+      return {
+        label: 'other',
+        confidence: 0.1,
+        evidence: 'no labeling functions matched'
+      };
+    }
+
+    // Calculate weighted confidence for each label
+    const labelScores = {};
+    Object.entries(votes).forEach(([label, labelVotes]) => {
+      const totalConfidence = labelVotes.reduce((sum, vote) => sum + vote.confidence, 0);
+      const avgConfidence = totalConfidence / labelVotes.length;
+      const voteStrength = labelVotes.length; // More functions agreeing = higher strength
+      
+      labelScores[label] = {
+        score: avgConfidence * (1 + voteStrength * 0.1), // Bonus for agreement
+        votes: labelVotes.length,
+        avgConfidence: avgConfidence,
+        evidence: labelVotes.map(v => v.evidence).join('; ')
+      };
+    });
+
+    // Pick highest scoring label
+    const bestLabel = Object.entries(labelScores)
+      .sort(([,a], [,b]) => b.score - a.score)[0];
+
+    return {
+      label: bestLabel[0],
+      confidence: Math.min(0.95, bestLabel[1].score),
+      votes: bestLabel[1].votes,
+      evidence: bestLabel[1].evidence,
+      allScores: labelScores
+    };
+  }
+
+  // =============================================================================
+  // LABELING FUNCTIONS - Each returns {label, confidence, reason} or null
+  // =============================================================================
+
+  /**
+   * LF1: Heading looks like a person's name
+   */
+  LF1_headingLooksLikeName(block, context) {
+    if (!block.heading) return { label: null, confidence: 0 };
+    
+    const heading = block.heading.trim();
+    const hasPersonName = this.looksLikePersonName(heading);
+    
+    if (hasPersonName) {
+      return {
+        label: 'profile_card',
+        confidence: 0.8,
+        reason: `Heading "${heading}" looks like a person name`
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF2: Block has sibling with role words
+   */
+  LF2_siblingHasRoleWords(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    const roleWords = ['director', 'manager', 'executive', 'assistant', 'coordinator', 
+                      'specialist', 'analyst', 'officer', 'president', 'vice', 'chief',
+                      'senior', 'junior', 'lead', 'head', 'supervisor', 'administrator'];
+    
+    const siblingText = block.element.siblings().text().toLowerCase();
+    const blockText = block.element.text().toLowerCase();
+    const combinedText = siblingText + ' ' + blockText;
+    
+    const roleMatches = roleWords.filter(word => combinedText.includes(word));
+    
+    if (roleMatches.length > 0) {
+      return {
+        label: 'profile_card',
+        confidence: Math.min(0.7, 0.3 + roleMatches.length * 0.1),
+        reason: `Contains role words: ${roleMatches.join(', ')}`
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF3: High link density suggests navigation/menu
+   */
+  LF3_highLinkDensity(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    const links = block.element.find('a');
+    const textLength = block.element.text().length;
+    const linkDensity = textLength > 0 ? (links.length * 20) / textLength : 0;
+    
+    if (linkDensity > 0.15) {
+      return {
+        label: 'nav',
+        confidence: Math.min(0.9, 0.5 + linkDensity * 2),
+        reason: `High link density: ${linkDensity.toFixed(3)} (${links.length} links, ${textLength} chars)`
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF4: Short lines with commas suggest person listings
+   */
+  LF4_shortCommaLines(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    const text = block.element.text();
+    const lines = text.split('\n').filter(line => line.trim().length > 5);
+    
+    if (lines.length < 3) return { label: null, confidence: 0 };
+    
+    let commaLineCount = 0;
+    let shortLineCount = 0;
+    
+    lines.forEach(line => {
+      line = line.trim();
+      if (line.includes(',')) commaLineCount++;
+      if (line.length < 80) shortLineCount++;
+    });
+    
+    const commaRatio = commaLineCount / lines.length;
+    const shortRatio = shortLineCount / lines.length;
+    
+    if (commaRatio > 0.6 && shortRatio > 0.7) {
+      return {
+        label: 'board_list',
+        confidence: 0.8,
+        reason: `${lines.length} lines, ${(commaRatio * 100).toFixed(0)}% have commas, ${(shortRatio * 100).toFixed(0)}% are short`
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF5: Has structured data with person schema
+   */
+  LF5_hasPersonSchema(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    const hasPersonSchema = block.element.find('[itemtype*="Person"], [typeof*="Person"]').length > 0;
+    const hasPersonClass = block.element.attr('class')?.toLowerCase().includes('person') || 
+                         block.element.find('[class*="person"], [class*="staff"], [class*="team"]').length > 0;
+    
+    if (hasPersonSchema) {
+      return {
+        label: 'profile_card',
+        confidence: 0.9,
+        reason: 'Has Person schema markup'
+      };
+    }
+    
+    if (hasPersonClass) {
+      return {
+        label: 'profile_card', 
+        confidence: 0.6,
+        reason: 'Has person-related CSS classes'
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF6: Contains profile-related keywords
+   */
+  LF6_profileKeywords(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    const profileKeywords = ['bio', 'biography', 'about', 'experience', 'background', 
+                            'education', 'graduated', 'university', 'degree', 'joined',
+                            'email', '@', 'phone', 'linkedin', 'twitter'];
+    
+    const blockText = block.element.text().toLowerCase();
+    const matches = profileKeywords.filter(keyword => blockText.includes(keyword));
+    
+    if (matches.length >= 2) {
+      return {
+        label: 'profile_card',
+        confidence: Math.min(0.7, 0.3 + matches.length * 0.08),
+        reason: `Contains profile keywords: ${matches.join(', ')}`
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF7: Matches board/staff listing patterns
+   */
+  LF7_boardPattern(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    // Only check immediate parent/sibling context, not deep hierarchy
+    const parentText = block.element.parent().text().toLowerCase();
+    const prevSiblingText = block.element.prev().text().toLowerCase();
+    const nextSiblingText = block.element.next().text().toLowerCase();
+    const immediateContext = parentText + ' ' + prevSiblingText + ' ' + nextSiblingText;
+    
+    const boardPatterns = ['board of directors', 'board members', 'board of trustees', 
+                         'advisory board', 'governing board', 'trustees'];
+    
+    // Only match if board patterns are in immediate context (not distant)
+    const hasBoardContext = boardPatterns.some(pattern => immediateContext.includes(pattern));
+    
+    // Additional check: if this block contains detailed bio info, it's probably a profile card not a list
+    const blockText = block.element.text().toLowerCase();
+    const hasDetailedBio = blockText.length > 200 && (
+      blockText.includes('experience') || 
+      blockText.includes('education') || 
+      blockText.includes('background') ||
+      blockText.includes('joined') ||
+      blockText.includes('graduated')
+    );
+    
+    if (hasBoardContext && !hasDetailedBio) {
+      return {
+        label: 'person_list',
+        confidence: 0.85,
+        reason: 'Appears under board/trustees heading context'
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * Check if text looks like a person's name
+   */
+  looksLikePersonName(text) {
+    if (!text || text.length < 3 || text.length > 50) return false;
+    
+    // Clean and check basic format
+    const cleaned = text.replace(/[.,\-()]/g, '').trim();
+    const words = cleaned.split(/\s+/);
+    
+    // Should have 1-4 words for a name
+    if (words.length < 1 || words.length > 4) return false;
+    
+    // Each word should start with capital letter
+    if (!words.every(word => /^[A-Z]/.test(word))) return false;
+    
+    // Should not contain numbers or special characters (except common name chars)
+    if (/[0-9@#$%^&*()_+=\[\]{}|\\:";'<>?\/]/.test(cleaned)) return false;
+    
+    // Should not be common non-name phrases
+    const nonNamePhrases = ['STAFF', 'TEAM', 'ABOUT US', 'CONTACT', 'HOME', 'BOARD'];
+    if (nonNamePhrases.includes(cleaned.toUpperCase())) return false;
+    
+    return true;
+  }
+}
+
+/**
  * Plan Executor - Runs skill plans step by step, logging traces for learning
  */
 class PlanExecutor {
@@ -222,6 +529,13 @@ class PlanExecutor {
       // Check preconditions
       const preconditionsValid = this.checkPreconditions(skillDef.preconditions);
       if (!preconditionsValid) {
+        console.log(`🐛 Precondition check failed for ${step.skill}:`, {
+          required: skillDef.preconditions,
+          contextKeys: Array.from(this.context.keys()),
+          hasSemanticBlocks: this.context.has('semantic_blocks'),
+          hasContentBlocks: this.context.has('content_blocks'), 
+          hasTargetSchema: this.context.has('target_schema')
+        });
         throw new Error(`Preconditions not met for ${step.skill}`);
       }
       
@@ -524,6 +838,14 @@ class PlanExecutor {
     const metaData = this.context.get('meta_data') || {};
     const targetSchema = this.context.get('target_schema');
     
+    console.log('🐛 MapFields context check:', {
+      semanticBlocksCount: semanticBlocks.length,
+      hasStructuredData: !!Object.keys(structuredData).length,
+      hasMetaData: !!Object.keys(metaData).length,
+      hasTargetSchema: !!targetSchema,
+      contextKeys: Array.from(this.context.keys())
+    });
+    
     if (!targetSchema) return { success: false, error: 'No target schema available' };
     
     try {
@@ -751,7 +1073,8 @@ class PlanExecutor {
       const passBInputs = {
         ...initialInputs,
         top_candidates: passAResult.data,
-        candidate_scores: passAResult.context_final?.candidate_scores || []
+        candidate_scores: passAResult.context_final?.candidate_scores || [],
+        semantic_blocks: passAResult.context_final?.semantic_blocks || []
       };
       
       // Execute Pass B (Enrich)
@@ -879,12 +1202,14 @@ class PlanExecutor {
   applyWeakSupervision(semanticBlocks) {
     console.log('🏷️ Applying weak supervision to', semanticBlocks.length, 'blocks');
     
-    const blockClassifier = new BlockClassifier();
+    const blockClassifier = this.getBlockClassifier();
     
-    const labeledBlocks = semanticBlocks.map(block => {
+    const labeledBlocks = semanticBlocks.map((block, idx) => {
       const classification = blockClassifier.classifyBlock(block, { 
         pageContext: this.context.get('page_context') || {}
       });
+      
+      console.log(`🐛 Block ${idx}: "${(block.heading || '').substring(0, 30)}" → ${classification.label} (${classification.confidence.toFixed(3)}) - ${classification.evidence}`);
       
       return {
         ...block,
@@ -1986,297 +2311,13 @@ class PlanExecutor {
   // =============================================================================
 
   /**
-   * Weak Supervision Block Classifier
-   * Uses multiple labeling functions to soft-label blocks without gold datasets
+   * Helper method to get block classifier instance
    */
-  class BlockClassifier {
-    constructor() {
-      this.labelingFunctions = [
-        this.LF1_headingLooksLikeName,
-        this.LF2_siblingHasRoleWords,
-        this.LF3_highLinkDensity,
-        this.LF4_shortCommaLines,
-        this.LF5_hasPersonSchema,
-        this.LF6_profileKeywords,
-        this.LF7_boardPattern
-      ];
+  getBlockClassifier() {
+    if (!this.blockClassifier) {
+      this.blockClassifier = new BlockClassifier();
     }
-
-    /**
-     * Classify a semantic block using weak supervision
-     */
-    classifyBlock(block, context = {}) {
-      const votes = {};
-      const evidence = {};
-      
-      // Apply each labeling function
-      this.labelingFunctions.forEach(lf => {
-        const result = lf.call(this, block, context);
-        if (result.label && result.confidence > 0.1) {
-          if (!votes[result.label]) votes[result.label] = [];
-          votes[result.label].push({
-            confidence: result.confidence,
-            evidence: result.evidence,
-            function: lf.name
-          });
-          evidence[lf.name] = result.evidence;
-        }
-      });
-
-      // Combine votes using confidence-weighted majority
-      return this.combineVotes(votes, evidence);
-    }
-
-    /**
-     * LF1: Heading looks like a person name → vote profile_card
-     */
-    LF1_headingLooksLikeName(block, context) {
-      if (!block.heading) return { label: null, confidence: 0 };
-      
-      const heading = block.heading.trim();
-      const hasPersonName = this.looksLikePersonName(heading);
-      
-      if (hasPersonName) {
-        return {
-          label: 'profile_card',
-          confidence: 0.8,
-          evidence: `heading "${heading}" looks like person name`
-        };
-      }
-      
-      return { label: null, confidence: 0 };
-    }
-
-    /**
-     * LF2: Sibling elements contain role words → vote profile_card  
-     */
-    LF2_siblingHasRoleWords(block, context) {
-      if (!block.element) return { label: null, confidence: 0 };
-      
-      const roleWords = ['director', 'manager', 'executive', 'assistant', 'coordinator', 
-                        'specialist', 'analyst', 'officer', 'president', 'vice', 'chief',
-                        'senior', 'junior', 'lead', 'head', 'supervisor', 'administrator'];
-      
-      const siblingText = block.element.siblings().text().toLowerCase();
-      const blockText = block.element.text().toLowerCase();
-      const combinedText = siblingText + ' ' + blockText;
-      
-      const roleMatches = roleWords.filter(word => combinedText.includes(word));
-      
-      if (roleMatches.length > 0) {
-        return {
-          label: 'profile_card',
-          confidence: Math.min(0.7, 0.3 + roleMatches.length * 0.1),
-          evidence: `contains role words: ${roleMatches.join(', ')}`
-        };
-      }
-      
-      return { label: null, confidence: 0 };
-    }
-
-    /**
-     * LF3: High link density → vote nav
-     */
-    LF3_highLinkDensity(block, context) {
-      if (!block.element) return { label: null, confidence: 0 };
-      
-      const links = block.element.find('a');
-      const textLength = block.element.text().length;
-      const linkDensity = textLength > 0 ? (links.length * 20) / textLength : 0;
-      
-      if (linkDensity > 0.15) {
-        return {
-          label: 'nav',
-          confidence: Math.min(0.9, 0.5 + linkDensity * 2),
-          evidence: `high link density: ${linkDensity.toFixed(3)} (${links.length} links, ${textLength} chars)`
-        };
-      }
-      
-      return { label: null, confidence: 0 };
-    }
-
-    /**
-     * LF4: Short comma-separated lines → vote board_list
-     */
-    LF4_shortCommaLines(block, context) {
-      if (!block.element) return { label: null, confidence: 0 };
-      
-      const text = block.element.text();
-      const lines = text.split('\n').filter(line => line.trim().length > 5);
-      
-      if (lines.length < 3) return { label: null, confidence: 0 };
-      
-      let commaLineCount = 0;
-      let shortLineCount = 0;
-      
-      lines.forEach(line => {
-        line = line.trim();
-        if (line.includes(',')) commaLineCount++;
-        if (line.length < 80) shortLineCount++;
-      });
-      
-      const commaRatio = commaLineCount / lines.length;
-      const shortRatio = shortLineCount / lines.length;
-      
-      if (commaRatio > 0.6 && shortRatio > 0.7) {
-        return {
-          label: 'board_list',
-          confidence: 0.8,
-          evidence: `${lines.length} lines, ${(commaRatio * 100).toFixed(0)}% have commas, ${(shortRatio * 100).toFixed(0)}% are short`
-        };
-      }
-      
-      return { label: null, confidence: 0 };
-    }
-
-    /**
-     * LF5: Has Person schema markup → vote profile_card
-     */
-    LF5_hasPersonSchema(block, context) {
-      if (!block.element) return { label: null, confidence: 0 };
-      
-      const hasPersonSchema = block.element.find('[itemtype*="Person"], [typeof*="Person"]').length > 0;
-      const hasPersonClass = block.element.attr('class')?.toLowerCase().includes('person') || 
-                           block.element.find('[class*="person"], [class*="staff"], [class*="team"]').length > 0;
-      
-      if (hasPersonSchema) {
-        return {
-          label: 'profile_card',
-          confidence: 0.9,
-          evidence: 'has Person schema markup'
-        };
-      }
-      
-      if (hasPersonClass) {
-        return {
-          label: 'profile_card', 
-          confidence: 0.6,
-          evidence: 'has person-related CSS classes'
-        };
-      }
-      
-      return { label: null, confidence: 0 };
-    }
-
-    /**
-     * LF6: Contains profile keywords → vote profile_card
-     */
-    LF6_profileKeywords(block, context) {
-      if (!block.element) return { label: null, confidence: 0 };
-      
-      const profileKeywords = ['bio', 'biography', 'about', 'experience', 'background', 
-                              'education', 'graduated', 'university', 'degree', 'joined',
-                              'email', '@', 'phone', 'linkedin', 'twitter'];
-      
-      const blockText = block.element.text().toLowerCase();
-      const matches = profileKeywords.filter(keyword => blockText.includes(keyword));
-      
-      if (matches.length >= 2) {
-        return {
-          label: 'profile_card',
-          confidence: Math.min(0.7, 0.3 + matches.length * 0.08),
-          evidence: `contains profile keywords: ${matches.join(', ')}`
-        };
-      }
-      
-      return { label: null, confidence: 0 };
-    }
-
-    /**
-     * LF7: Under "Board" heading → vote board_list
-     */
-    LF7_boardPattern(block, context) {
-      if (!block.element) return { label: null, confidence: 0 };
-      
-      const parentText = block.element.parent().text().toLowerCase();
-      const siblingText = block.element.siblings().text().toLowerCase();
-      const contextText = parentText + ' ' + siblingText;
-      
-      const boardPatterns = ['board of directors', 'board members', 'board of trustees', 
-                           'advisory board', 'governing board', 'trustees'];
-      
-      const hasBoardContext = boardPatterns.some(pattern => contextText.includes(pattern));
-      
-      if (hasBoardContext) {
-        return {
-          label: 'board_list',
-          confidence: 0.85,
-          evidence: 'appears under board/trustees heading context'
-        };
-      }
-      
-      return { label: null, confidence: 0 };
-    }
-
-    /**
-     * Combine labeling function votes using confidence weighting
-     */
-    combineVotes(votes, evidence) {
-      if (Object.keys(votes).length === 0) {
-        return {
-          label: 'other',
-          confidence: 0.1,
-          evidence: 'no labeling functions matched'
-        };
-      }
-
-      // Calculate weighted confidence for each label
-      const labelScores = {};
-      Object.entries(votes).forEach(([label, labelVotes]) => {
-        const totalConfidence = labelVotes.reduce((sum, vote) => sum + vote.confidence, 0);
-        const avgConfidence = totalConfidence / labelVotes.length;
-        const voteStrength = labelVotes.length; // More functions agreeing = higher strength
-        
-        labelScores[label] = {
-          score: avgConfidence * (1 + voteStrength * 0.1), // Bonus for agreement
-          votes: labelVotes.length,
-          avgConfidence: avgConfidence,
-          evidence: labelVotes.map(v => v.evidence).join('; ')
-        };
-      });
-
-      // Pick highest scoring label
-      const bestLabel = Object.entries(labelScores)
-        .sort(([,a], [,b]) => b.score - a.score)[0];
-
-      return {
-        label: bestLabel[0],
-        confidence: Math.min(0.95, bestLabel[1].score),
-        votes: bestLabel[1].votes,
-        evidence: bestLabel[1].evidence,
-        allScores: labelScores
-      };
-    }
-
-    /**
-     * Helper: Check if text looks like a person name
-     */
-    looksLikePersonName(text) {
-      if (!text || text.length < 2) return false;
-      
-      // Clean and check
-      const cleaned = text.trim();
-      const words = cleaned.split(/\s+/);
-      
-      // Must have at least 2 words
-      if (words.length < 2) return false;
-      
-      // No more than 5 words (likely not a name)
-      if (words.length > 5) return false;
-      
-      // Each word should start with capital letter
-      const allCapitalized = words.every(word => /^[A-Z]/.test(word));
-      if (!allCapitalized) return false;
-      
-      // Should not contain numbers or special characters (except common name chars)
-      if (/[0-9@#$%^&*()_+=\[\]{}|\\:";'<>?\/]/.test(cleaned)) return false;
-      
-      // Should not be common non-name phrases
-      const nonNamePhrases = ['STAFF', 'TEAM', 'ABOUT US', 'CONTACT', 'HOME', 'BOARD'];
-      if (nonNamePhrases.includes(cleaned.toUpperCase())) return false;
-      
-      return true;
-    }
+    return this.blockClassifier;
   }
 
   // =============================================================================
@@ -5268,9 +5309,12 @@ function extractStructuredObject(content, schema, instructions) {
 }
 
 /**
- * Core skill: ValidateOutput - Ensure output matches expected schema
+ * @deprecated - DEPRECATED: Old validateOutputSkill replaced by skillValidateOutput in PlanExecutor
+ * This function is no longer used in the plan-based system
  */
 function validateOutputSkill(data, schema) {
+  console.warn('⚠️ DEPRECATED: validateOutputSkill is deprecated. Use skillValidateOutput in PlanExecutor instead.');
+  
   if (!schema) return { success: true, data, issues: [] };
   
   const issues = [];
@@ -5298,32 +5342,14 @@ function validateOutputSkill(data, schema) {
 }
 
 /**
- * Simple skill-based processor for structured extraction
+ * @deprecated - DEPRECATED: Old skill-based processor replaced by plan-based system
+ * Use processWithPlanBasedSystem instead - this provides better DOM-first extraction
  */
 async function processWithSkills(content, params) {
-  console.log('Processing with skills - Instructions:', params.extractionInstructions);
-  console.log('Schema type:', params.outputSchema?.type);
+  console.warn('⚠️ DEPRECATED: processWithSkills is deprecated. Use processWithPlanBasedSystem instead.');
   
-  // Step 1: Map fields according to schema
-  const mapResult = mapFieldsSkill(content, params.outputSchema, params.extractionInstructions);
-  
-  if (!mapResult.success) {
-    throw new Error(`Field mapping failed: ${mapResult.error}`);
-  }
-  
-  // Step 2: Validate output
-  const validateResult = validateOutputSkill(mapResult.data, params.outputSchema);
-  
-  return {
-    success: true,
-    data: validateResult.data,
-    metadata: {
-      strategy: 'skill_based_extraction',
-      skills_used: ['MapFields', 'ValidateOutput'],
-      issues: validateResult.issues || [],
-      confidence: validateResult.issues?.length === 0 ? 0.9 : 0.7
-    }
-  };
+  // Redirect to new plan-based system
+  return await processWithPlanBasedSystem(content, params);
 }
 
 // Update job status in DynamoDB
@@ -6209,7 +6235,29 @@ async function testPlanBasedSystem() {
     console.log('Evaluation score:', result.metadata?.evaluation?.overall_score);
     
     if (result.success && result.data) {
-      console.log('Sample extracted data:', JSON.stringify(result.data.slice ? result.data.slice(0, 2) : result.data, null, 2));
+      // Create JSON-safe version by removing circular references and DOM elements
+      const cleanData = (data) => {
+        if (Array.isArray(data)) {
+          return data.slice(0, 2).map(item => cleanData(item));
+        } else if (data && typeof data === 'object') {
+          const clean = {};
+          for (const [key, value] of Object.entries(data)) {
+            // Skip DOM elements and circular references
+            if (key === 'element' || key === 'dom_structure' || typeof value === 'function') {
+              continue;
+            }
+            if (value && typeof value === 'object' && (value.constructor.name === 'Element' || value.cheerio)) {
+              continue;
+            }
+            clean[key] = cleanData(value);
+          }
+          return clean;
+        }
+        return data;
+      };
+      
+      const sampleData = cleanData(result.data);
+      console.log('Sample extracted data:', JSON.stringify(sampleData, null, 2));
     }
     
     if (result.metadata?.evaluation?.issues?.length > 0) {
