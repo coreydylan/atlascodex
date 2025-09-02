@@ -5000,6 +5000,202 @@ class SimpleEvaluator {
 }
 
 /**
+ * Smart LLM-based transformation to convert raw data to schema format
+ */
+async function transformDataToSchema(rawData, targetSchema, instructions) {
+  console.log('🤖 Starting smart transformation to match schema');
+  
+  try {
+    // Check if we have OpenAI API key for GPT
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey || openaiKey === 'sk-placeholder') {
+      console.log('⚠️ No OpenAI API key, using deterministic transformation');
+      return deterministicTransformation(rawData, targetSchema);
+    }
+    
+    // Prepare the transformation prompt
+    const transformationPrompt = `You are a data transformation expert. Your task is to transform raw extracted data into a specific JSON schema format.
+
+Target Schema:
+${JSON.stringify(targetSchema, null, 2)}
+
+Extraction Instructions:
+${instructions}
+
+Raw Extracted Data:
+${JSON.stringify(rawData, null, 2).slice(0, 8000)}
+
+IMPORTANT RULES:
+1. Your response must be ONLY valid JSON that exactly matches the target schema
+2. Extract and transform ALL relevant data from the raw input
+3. Map fields intelligently - look for semantic meaning, not just exact matches
+4. If data is nested or scattered, consolidate it properly
+5. For arrays, include ALL items found, not just examples
+6. Fill in required fields, leave optional fields empty if no data
+7. Do NOT include any explanations, just the JSON output
+8. Ensure all text is properly cleaned (no HTML, proper spacing)
+
+Transform the raw data to match the schema EXACTLY:`;
+
+    // Call OpenAI API for transformation
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openaiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-5',
+        messages: [{
+          role: 'system',
+          content: 'You are a precise data transformation assistant. You output ONLY valid JSON with no explanations.'
+        }, {
+          role: 'user',
+          content: transformationPrompt
+        }],
+        temperature: 0,
+        max_tokens: 4000,
+        response_format: { type: 'json_object' }
+      })
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      const transformedText = result.choices[0].message.content;
+      
+      // Parse the JSON response
+      try {
+        const transformed = JSON.parse(transformedText);
+        console.log('✅ Smart transformation successful using GPT-5');
+        return transformed;
+      } catch (parseError) {
+        // Try to extract JSON from the response
+        const jsonMatch = transformedText.match(/\{[\s\S]*\}/);  
+        if (jsonMatch) {
+          const transformed = JSON.parse(jsonMatch[0]);
+          console.log('✅ Extracted valid JSON from GPT response');
+          return transformed;
+        }
+        throw new Error('Failed to parse transformed data');
+      }
+    } else {
+      console.error('OpenAI API error:', response.statusText);
+      return deterministicTransformation(rawData, targetSchema);
+    }
+  } catch (error) {
+    console.error('Smart transformation failed:', error);
+    // Fallback to deterministic transformation
+    return deterministicTransformation(rawData, targetSchema);
+  }
+}
+
+/**
+ * Deterministic transformation fallback when LLM is not available
+ */
+function deterministicTransformation(rawData, targetSchema) {
+  console.log('📐 Using deterministic transformation');
+  
+  const result = {};
+  
+  // Handle different raw data formats
+  if (Array.isArray(rawData)) {
+    // If raw data is array, try to map to schema
+    for (const [key, prop] of Object.entries(targetSchema.properties || {})) {
+      if (prop.type === 'array') {
+        // Map array data to array property
+        result[key] = rawData.map(item => {
+          if (prop.items && prop.items.properties) {
+            return extractFieldsFromItem(item, prop.items.properties);
+          }
+          return item;
+        });
+      } else if (prop.type === 'number' && key.includes('count')) {
+        result[key] = rawData.length;
+      }
+    }
+  } else if (typeof rawData === 'object') {
+    // Process object data
+    for (const [key, prop] of Object.entries(targetSchema.properties || {})) {
+      result[key] = findAndExtractField(rawData, key, prop);
+    }
+  }
+  
+  // Ensure schema compliance
+  return enforceSchemaCompliance(result, targetSchema);
+}
+
+function extractFieldsFromItem(item, properties) {
+  const result = {};
+  
+  for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+    // Try multiple strategies to find the field
+    result[fieldName] = 
+      item[fieldName] ||
+      findInNestedObject(item, fieldName) ||
+      extractFromText(item, fieldName) ||
+      getDefaultForType(fieldSchema.type);
+  }
+  
+  return result;
+}
+
+function findAndExtractField(data, fieldName, fieldSchema) {
+  // Direct match
+  if (data[fieldName] !== undefined) {
+    return data[fieldName];
+  }
+  
+  // Try variations of field name
+  const variations = [
+    fieldName.toLowerCase(),
+    fieldName.toUpperCase(),
+    fieldName.replace(/_/g, ''),
+    fieldName.replace(/_/g, '-')
+  ];
+  
+  for (const variation of variations) {
+    if (data[variation] !== undefined) {
+      return data[variation];
+    }
+  }
+  
+  // Search in nested objects
+  return findInNestedObject(data, fieldName) || getDefaultForType(fieldSchema.type);
+}
+
+function findInNestedObject(obj, fieldName) {
+  for (const key in obj) {
+    if (key.toLowerCase().includes(fieldName.toLowerCase())) {
+      return obj[key];
+    }
+    if (typeof obj[key] === 'object' && obj[key] !== null) {
+      const found = findInNestedObject(obj[key], fieldName);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+function extractFromText(item, fieldName) {
+  // Try to extract from text fields
+  const text = item.block_text || item.text || item.content || '';
+  
+  if (fieldName === 'name' || fieldName === 'title') {
+    // Extract first line or heading
+    const lines = text.split('\n').filter(l => l.trim());
+    return lines[0] || '';
+  }
+  
+  if (fieldName === 'bio' || fieldName === 'description') {
+    // Return full text minus the first line
+    const lines = text.split('\n').filter(l => l.trim());
+    return lines.slice(1).join(' ').trim();
+  }
+  
+  return undefined;
+}
+
+/**
  * Main plan-based processor - replaces old hardcoded extraction
  */
 async function processWithPlanBasedSystem(content, params) {
@@ -5073,11 +5269,19 @@ async function processWithPlanBasedSystem(content, params) {
     console.log(`📊 Audit report: ${auditReport.session_summary.total_decisions} decisions, ${auditReport.filtering_audit.total_steps} filtering steps`);
     console.log(`🎓 Learning value: ${learningAnalysis.learning_value_score.toFixed(2)} (${learningAnalysis.queue_status.total_queued} cases queued)`);
     
-    // Enforce schema compliance if provided
+    // Transform raw extraction data to match schema using smart LLM layer
     let finalData = executionResult.data;
-    if (targetSchema) {
+    if (targetSchema && instructions) {
+      console.log('🔄 Transforming raw data to match schema...');
+      finalData = await transformDataToSchema(
+        executionResult.data,
+        targetSchema,
+        instructions
+      );
+      
+      // Final validation to ensure perfect compliance
       finalData = enforceSchemaCompliance(finalData, targetSchema);
-      console.log('📋 Schema enforcement applied to extraction results');
+      console.log('✅ Data transformation complete - matches schema perfectly');
     }
     
     return {
