@@ -5028,12 +5028,15 @@ ${JSON.stringify(rawData, null, 2).slice(0, 8000)}
 IMPORTANT RULES:
 1. Your response must be ONLY valid JSON that exactly matches the target schema
 2. Extract and transform ALL relevant data from the raw input
-3. Map fields intelligently - look for semantic meaning, not just exact matches
-4. If data is nested or scattered, consolidate it properly
-5. For arrays, include ALL items found, not just examples
-6. Fill in required fields, leave optional fields empty if no data
+3. Parse and split concatenated text properly - if name contains title and bio, split them
+4. DEDUPLICATE - each person should appear only ONCE
+5. Clean data:
+   - Split 'Katrina BruinsExecutive Director' into name: 'Katrina Bruins', title: 'Executive Director'
+   - Extract bio as the description text that follows
+   - Remove any HTML, timestamps, or metadata
+6. Return a clean array with ONLY unique people
 7. Do NOT include any explanations, just the JSON output
-8. Ensure all text is properly cleaned (no HTML, proper spacing)
+8. Each person should have clean, separate fields for name, title/role, and bio
 
 Transform the raw data to match the schema EXACTLY:`;
 
@@ -5284,19 +5287,74 @@ async function processWithPlanBasedSystem(content, params) {
       console.log('✅ Data transformation complete - matches schema perfectly');
     }
     
-    // SIMPLIFY: Return ONLY the data the user asked for, no metadata
-    if (finalData && typeof finalData === 'object') {
-      // Remove all metadata fields
-      delete finalData.extractionNote;
-      delete finalData.instructions;
-      delete finalData.postProcessing;
-      delete finalData.metadata;
-      delete finalData.extraction_metadata;
-      
-      // If there's a single array property that matches the main request, return just that
-      const props = Object.keys(finalData);
-      if (props.length === 1 && Array.isArray(finalData[props[0]])) {
-        finalData = finalData[props[0]];
+    // AGGRESSIVELY SIMPLIFY: Return ONLY the clean data the user asked for
+    if (finalData) {
+      // If it's already an array, deduplicate and clean it
+      if (Array.isArray(finalData)) {
+        // Deduplicate based on name field
+        const seen = new Set();
+        finalData = finalData.filter(item => {
+          if (!item.name || seen.has(item.name)) return false;
+          seen.add(item.name);
+          
+          // Clean each item - extract name, title/role, bio properly
+          if (typeof item.name === 'string' && item.name.includes('\n')) {
+            const parts = item.name.split('\n').filter(p => p.trim());
+            item.name = parts[0] || '';
+            item.title = item.title || parts[1] || '';
+            item.bio = item.bio || parts.slice(2).join(' ') || '';
+          }
+          
+          // Clean up messy concatenated text in name field
+          if (item.name && item.name.length > 100) {
+            const nameMatch = item.name.match(/^([^A-Z]+)/);
+            if (nameMatch) {
+              const restText = item.name.substring(nameMatch[0].length);
+              item.name = nameMatch[1].trim();
+              item.bio = item.bio || restText;
+            }
+          }
+          
+          // Clean role field
+          if (item.role && item.role.includes(',')) {
+            item.role = item.role.split(',')[0].trim();
+          }
+          
+          return true;
+        });
+      } else if (typeof finalData === 'object') {
+        // Remove ALL metadata fields
+        delete finalData.url;
+        delete finalData.title;
+        delete finalData.metadata;
+        delete finalData.extractionNote;
+        delete finalData.instructions;
+        delete finalData.postProcessing;
+        delete finalData.extraction_metadata;
+        delete finalData.total_count;
+        delete finalData.skills_used;
+        delete finalData.plan_id;
+        delete finalData.evaluation;
+        delete finalData.confidence;
+        
+        // If there's a 'people' or similar array field, extract just that
+        const arrayFields = Object.keys(finalData).filter(key => 
+          Array.isArray(finalData[key]) && 
+          (key === 'people' || key === 'items' || key === 'products' || key === 'articles' || key === 'events')
+        );
+        
+        if (arrayFields.length === 1) {
+          finalData = finalData[arrayFields[0]];
+          
+          // Apply same deduplication and cleaning
+          const seen = new Set();
+          finalData = finalData.filter(item => {
+            const identifier = item.name || item.title || JSON.stringify(item);
+            if (seen.has(identifier)) return false;
+            seen.add(identifier);
+            return true;
+          });
+        }
       }
     }
     
