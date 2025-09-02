@@ -66,7 +66,8 @@ import {
   GitBranch,
   Box,
   Folder,
-  MessageCircle
+  MessageCircle,
+  Edit
 } from 'lucide-react';
 
 const API_BASE = process.env.REACT_APP_API_URL || 'https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev';
@@ -393,25 +394,193 @@ export default function ExtractorUI() {
   const [selectedPreset, setSelectedPreset] = useState<string>('');
   const [customInstructions, setCustomInstructions] = useState('');
   const [customSchema, setCustomSchema] = useState('');
+  const [naturalLanguageInput, setNaturalLanguageInput] = useState('');
+  const [generatedInstructions, setGeneratedInstructions] = useState('');
+  const [generatedSchema, setGeneratedSchema] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionProgress, setExtractionProgress] = useState<any>(null);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string>('');
   const [viewMode, setViewMode] = useState<'visual' | 'json' | 'table'>('visual');
   const [jobId, setJobId] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<'presets' | 'custom' | 'generate'>('presets');
 
-  // Get current instructions and schema
+  // Get current instructions and schema based on active tab
   const getCurrentConfig = () => {
-    if (selectedPreset && EXTRACTION_PRESETS[selectedPreset]) {
+    if (activeTab === 'presets' && selectedPreset && EXTRACTION_PRESETS[selectedPreset]) {
       return {
         instructions: EXTRACTION_PRESETS[selectedPreset].instructions,
         schema: EXTRACTION_PRESETS[selectedPreset].schema
+      };
+    } else if (activeTab === 'generate') {
+      return {
+        instructions: generatedInstructions,
+        schema: generatedSchema ? JSON.parse(generatedSchema) : null
       };
     }
     return {
       instructions: customInstructions,
       schema: customSchema ? JSON.parse(customSchema) : null
     };
+  };
+
+  // Generate extraction config from natural language
+  const handleGenerate = async () => {
+    if (!naturalLanguageInput) {
+      setError('Please describe what you want to extract');
+      return;
+    }
+
+    setIsGenerating(true);
+    setError('');
+
+    try {
+      // Create a prompt that will generate both instructions and schema
+      const prompt = `Generate extraction configuration for: "${naturalLanguageInput}"
+      
+      I need:
+      1. Clear extraction instructions
+      2. A JSON schema for the output structure
+      
+      Make the extraction comprehensive and well-structured.`;
+
+      const response = await fetch(`${API_BASE}/api/ai/process`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123'
+        },
+        body: JSON.stringify({
+          prompt: naturalLanguageInput,
+          autoExecute: false
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to generate configuration');
+      }
+
+      const data = await response.json();
+      
+      // Extract instructions and schema from AI response
+      let instructions = '';
+      let schema = {};
+
+      // Parse the AI response to get structured extraction params
+      if (data.params) {
+        instructions = data.params.extractionInstructions || 
+                      data.params.instructions || 
+                      `Extract ${naturalLanguageInput}`;
+        
+        schema = data.params.outputSchema || 
+                data.params.schema || 
+                {
+                  type: 'object',
+                  properties: {
+                    data: {
+                      type: 'array',
+                      items: { type: 'object' }
+                    }
+                  }
+                };
+      } else {
+        // Fallback: generate basic instructions and schema from the input
+        instructions = `Extract comprehensive information about: ${naturalLanguageInput}. Include all relevant details, relationships, and metadata.`;
+        
+        // Try to infer a basic schema structure
+        const lowerInput = naturalLanguageInput.toLowerCase();
+        
+        if (lowerInput.includes('people') || lowerInput.includes('person') || lowerInput.includes('staff')) {
+          schema = {
+            type: 'object',
+            properties: {
+              people: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string' },
+                    role: { type: 'string' },
+                    details: { type: 'string' }
+                  }
+                }
+              }
+            }
+          };
+        } else if (lowerInput.includes('product') || lowerInput.includes('item')) {
+          schema = {
+            type: 'object',
+            properties: {
+              products: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string' },
+                    description: { type: 'string' },
+                    price: { type: 'string' },
+                    details: { type: 'object' }
+                  }
+                }
+              }
+            }
+          };
+        } else if (lowerInput.includes('article') || lowerInput.includes('blog') || lowerInput.includes('post')) {
+          schema = {
+            type: 'object',
+            properties: {
+              articles: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    title: { type: 'string' },
+                    author: { type: 'string' },
+                    date: { type: 'string' },
+                    content: { type: 'string' }
+                  }
+                }
+              }
+            }
+          };
+        } else {
+          // Generic schema for any data
+          schema = {
+            type: 'object',
+            properties: {
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    title: { type: 'string' },
+                    description: { type: 'string' },
+                    metadata: { type: 'object' }
+                  }
+                }
+              },
+              summary: {
+                type: 'object',
+                properties: {
+                  total_count: { type: 'number' },
+                  categories: { type: 'array', items: { type: 'string' } }
+                }
+              }
+            }
+          };
+        }
+      }
+
+      setGeneratedInstructions(instructions);
+      setGeneratedSchema(JSON.stringify(schema, null, 2));
+      setIsGenerating(false);
+    } catch (err) {
+      console.error('Generation error:', err);
+      setError(err.message || 'Failed to generate configuration');
+      setIsGenerating(false);
+    }
   };
 
   // Poll job status
@@ -586,10 +755,15 @@ export default function ExtractorUI() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <Tabs defaultValue="presets" className="w-full">
-                  <TabsList className="grid w-full grid-cols-2">
+                <Tabs 
+                  value={activeTab} 
+                  onValueChange={(value) => setActiveTab(value as 'presets' | 'custom' | 'generate')}
+                  className="w-full"
+                >
+                  <TabsList className="grid w-full grid-cols-3">
                     <TabsTrigger value="presets">Presets</TabsTrigger>
                     <TabsTrigger value="custom">Custom</TabsTrigger>
+                    <TabsTrigger value="generate">Generate</TabsTrigger>
                   </TabsList>
                   
                   <TabsContent value="presets" className="space-y-4">
@@ -644,6 +818,90 @@ export default function ExtractorUI() {
                         onChange={(e) => setCustomSchema(e.target.value)}
                       />
                     </div>
+                  </TabsContent>
+                  
+                  <TabsContent value="generate" className="space-y-4">
+                    <div>
+                      <Label className="flex items-center gap-2 mb-2">
+                        <Sparkles className="w-4 h-4 text-orange-500" />
+                        Describe what you want to extract
+                      </Label>
+                      <textarea
+                        className="w-full p-3 border rounded-lg text-sm"
+                        rows={3}
+                        placeholder="Example: Get all team members with their names, roles, contact info, and bios..."
+                        value={naturalLanguageInput}
+                        onChange={(e) => setNaturalLanguageInput(e.target.value)}
+                      />
+                      
+                      <Button
+                        onClick={handleGenerate}
+                        disabled={isGenerating || !naturalLanguageInput}
+                        className="mt-3 w-full bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white"
+                      >
+                        {isGenerating ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Generating Configuration...
+                          </>
+                        ) : (
+                          <>
+                            <Brain className="w-4 h-4 mr-2" />
+                            Generate Extraction Config
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    
+                    {generatedInstructions && (
+                      <div className="space-y-3">
+                        <Alert className="bg-green-50 border-green-200">
+                          <CheckCircle className="w-4 h-4 text-green-600" />
+                          <AlertDescription className="text-green-800">
+                            Configuration generated successfully! Review below before extracting.
+                          </AlertDescription>
+                        </Alert>
+                        
+                        <div>
+                          <Label className="text-xs text-gray-500">Generated Instructions</Label>
+                          <div className="mt-1 p-3 bg-gray-50 border rounded-lg text-sm">
+                            {generatedInstructions}
+                          </div>
+                        </div>
+                        
+                        <div>
+                          <Label className="text-xs text-gray-500">Generated Schema</Label>
+                          <pre className="mt-1 p-3 bg-gray-50 border rounded-lg text-xs font-mono overflow-x-auto">
+                            {generatedSchema}
+                          </pre>
+                        </div>
+                        
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setCustomInstructions(generatedInstructions);
+                              setCustomSchema(generatedSchema);
+                              setActiveTab('custom');
+                            }}
+                          >
+                            <Edit className="w-3 h-3 mr-1" />
+                            Edit in Custom
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              navigator.clipboard.writeText(generatedSchema);
+                            }}
+                          >
+                            <Copy className="w-3 h-3 mr-1" />
+                            Copy Schema
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </TabsContent>
                 </Tabs>
               </CardContent>
