@@ -16,12 +16,13 @@ Available formats:
 - json: Structured data (OpenGraph, JSON-LD, meta tags)
 - summary: Auto-generated content summary
 - screenshot: Visual capture of the page
+- structured: Custom structured data based on extraction instructions
 
 Parse the user's request and return a JSON structure with:
 {
   "url": "the target URL",
   "type": "scrape|search|crawl|map",
-  "formats": ["markdown", "links", etc],
+  "formats": ["markdown", "links", "json", etc],
   "params": {
     // Mode-specific parameters
     "searchQuery": "for search mode",
@@ -30,7 +31,10 @@ Parse the user's request and return a JSON structure with:
     "includeSubdomains": false,
     "onlyMainContent": true,
     "waitFor": 2000, // milliseconds to wait
-    "headers": {} // custom headers if needed
+    "headers": {}, // custom headers if needed
+    "extractionInstructions": "Specific instructions for what to extract and how to structure it",
+    "outputSchema": {}, // JSON schema for structured output
+    "postProcessing": "Instructions for filtering/transforming the extracted data"
   },
   "explanation": "Brief explanation of what will be done"
 }
@@ -40,24 +44,84 @@ User: "Get me all the product prices from amazon.com/bestsellers"
 Response: {
   "url": "https://amazon.com/bestsellers",
   "type": "scrape",
-  "formats": ["json", "markdown"],
+  "formats": ["structured"],
   "params": {
     "onlyMainContent": true,
-    "waitFor": 3000
+    "waitFor": 3000,
+    "extractionInstructions": "Extract all products with their names and prices",
+    "outputSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "price": {"type": "string"},
+          "rating": {"type": "string"}
+        }
+      }
+    },
+    "postProcessing": "Return an array of product objects with name, price, and rating"
   },
-  "explanation": "Extracting product information and prices from Amazon bestsellers page"
+  "explanation": "Extracting structured product data with prices from Amazon bestsellers"
+}
+
+User: "Get a list of the top 10 articles on nytimes.com"
+Response: {
+  "url": "https://nytimes.com",
+  "type": "scrape",
+  "formats": ["structured"],
+  "params": {
+    "onlyMainContent": true,
+    "extractionInstructions": "Extract the top 10 article headlines with their links and summaries from the homepage",
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "articles": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {"type": "string"},
+              "url": {"type": "string"},
+              "summary": {"type": "string"},
+              "author": {"type": "string"},
+              "section": {"type": "string"}
+            }
+          }
+        },
+        "extractedAt": {"type": "string"}
+      }
+    },
+    "postProcessing": "Return only the top 10 articles as a structured JSON array with title, url, summary, author, and section for each article"
+  },
+  "explanation": "Extracting the top 10 articles from NYTimes homepage as structured data"
 }
 
 User: "Find all mentions of AI on nytimes.com and get me the articles"
 Response: {
   "url": "https://nytimes.com",
   "type": "search",
-  "formats": ["markdown", "links"],
+  "formats": ["structured"],
   "params": {
     "searchQuery": "AI artificial intelligence",
-    "onlyMainContent": true
+    "onlyMainContent": true,
+    "extractionInstructions": "Find and extract all articles mentioning AI or artificial intelligence",
+    "outputSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "url": {"type": "string"},
+          "excerpt": {"type": "string"},
+          "date": {"type": "string"}
+        }
+      }
+    },
+    "postProcessing": "Return only articles that mention AI, as an array of objects with title, url, excerpt, and date"
   },
-  "explanation": "Searching for AI-related content on NYTimes and extracting matching articles"
+  "explanation": "Searching for AI-related articles and returning structured results"
 }
 
 User: "Map out the entire documentation site for react"
@@ -69,7 +133,14 @@ Response: {
     "includeSubdomains": true
   },
   "explanation": "Creating a complete sitemap of React documentation"
-}`;
+}
+
+IMPORTANT: When users ask for specific data (like "top 10", "list of", "prices", "articles about X"), always:
+1. Use format: ["structured"] to return structured data
+2. Provide clear extractionInstructions describing what specific data to extract
+3. Define an outputSchema that matches the requested data structure
+4. Include postProcessing instructions to filter and format the final output
+5. The goal is to return ONLY the requested data, not the entire page content`;
 
 // Function to call OpenAI API (or use local processing)
 async function processWithAI(userInput, apiKey) {
@@ -119,6 +190,16 @@ function processWithRules(userInput) {
     }
   };
   
+  // Check for specific data requests
+  const needsStructured = 
+    input.includes('top ') ||
+    input.includes('list of') ||
+    input.includes('articles') ||
+    input.includes('products') ||
+    input.includes('prices') ||
+    input.includes('get me') ||
+    input.includes('find all');
+  
   // Extract URL
   const urlMatch = userInput.match(/(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+(?:\/[^\s]*)?)/);
   if (urlMatch) {
@@ -163,28 +244,87 @@ function processWithRules(userInput) {
   // Determine formats based on keywords
   const formats = [];
   
-  if (input.includes('markdown') || input.includes('article') || input.includes('content')) {
-    formats.push('markdown');
-  }
-  if (input.includes('html') || input.includes('raw')) {
-    formats.push('html');
-  }
-  if (input.includes('link') || input.includes('url')) {
-    formats.push('links');
-  }
-  if (input.includes('json') || input.includes('data') || input.includes('structured')) {
-    formats.push('json');
-  }
-  if (input.includes('summar') || input.includes('brief') || input.includes('overview')) {
-    formats.push('summary');
-  }
-  if (input.includes('screenshot') || input.includes('image') || input.includes('visual')) {
-    formats.push('screenshot');
+  // Check if structured data is needed
+  if (needsStructured) {
+    formats.push('structured');
+    
+    // Generate extraction instructions based on request
+    if (input.includes('top 10') || input.includes('top ten')) {
+      result.params.extractionInstructions = 'Extract the top 10 items from the page';
+      result.params.outputSchema = {
+        type: 'array',
+        maxItems: 10,
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            url: { type: 'string' },
+            description: { type: 'string' }
+          }
+        }
+      };
+      result.params.postProcessing = 'Return only the top 10 items as a structured array';
+    } else if (input.includes('articles')) {
+      const count = input.match(/(\d+)\s*articles/);
+      const limit = count ? parseInt(count[1]) : 10;
+      result.params.extractionInstructions = `Extract ${limit} article headlines with links and summaries`;
+      result.params.outputSchema = {
+        type: 'object',
+        properties: {
+          articles: {
+            type: 'array',
+            maxItems: limit,
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                url: { type: 'string' },
+                summary: { type: 'string' }
+              }
+            }
+          }
+        }
+      };
+      result.params.postProcessing = `Return only ${limit} articles as structured data`;
+    } else if (input.includes('price')) {
+      result.params.extractionInstructions = 'Extract all product names and prices';
+      result.params.outputSchema = {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            price: { type: 'string' }
+          }
+        }
+      };
+      result.params.postProcessing = 'Return products with their prices as structured data';
+    }
+  } else {
+    // Original format detection
+    if (input.includes('markdown') || input.includes('article') || input.includes('content')) {
+      formats.push('markdown');
+    }
+    if (input.includes('html') || input.includes('raw')) {
+      formats.push('html');
+    }
+    if (input.includes('link') || input.includes('url')) {
+      formats.push('links');
+    }
+    if (input.includes('json') || input.includes('data')) {
+      formats.push('json');
+    }
+    if (input.includes('summar') || input.includes('brief') || input.includes('overview')) {
+      formats.push('summary');
+    }
+    if (input.includes('screenshot') || input.includes('image') || input.includes('visual')) {
+      formats.push('screenshot');
+    }
   }
   
-  // Default to markdown if no format specified
+  // Default to structured if specific data requested, otherwise markdown
   if (formats.length === 0) {
-    formats.push('markdown');
+    formats.push(needsStructured ? 'structured' : 'markdown');
   }
   
   result.formats = formats;

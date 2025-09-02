@@ -268,6 +268,125 @@ function generateSummary(text, maxLength = 500) {
   return summary.trim() || text.substring(0, maxLength);
 }
 
+// Process structured extraction based on instructions
+function processStructuredExtraction(html, instructions, schema, postProcessing, existingData) {
+  try {
+    // For NYTimes-style article extraction
+    if (instructions && (instructions.includes('top 10 article') || instructions.includes('articles'))) {
+      const articles = [];
+      
+      // Find article elements (common patterns for NYTimes)
+      const articlePatterns = [
+        /<article[^>]*>([\\s\\S]*?)<\/article>/gi,
+        /<div[^>]*class="[^"]*story[^"]*"[^>]*>([\\s\\S]*?)<\/div>/gi,
+        /<section[^>]*data-testid="[^"]*story[^"]*"[^>]*>([\\s\\S]*?)<\/section>/gi
+      ];
+      
+      // Extract articles using various patterns
+      for (const pattern of articlePatterns) {
+        const matches = html.matchAll(pattern);
+        for (const match of matches) {
+          if (articles.length >= 10) break;
+          
+          const articleHtml = match[0];
+          
+          // Extract title
+          const titleMatch = articleHtml.match(/<h[1-3][^>]*>([^<]+)<\/h[1-3]>/i);
+          const title = titleMatch ? titleMatch[1].trim() : '';
+          
+          // Extract link
+          const linkMatch = articleHtml.match(/href="([^"]+)"/i);
+          const url = linkMatch ? linkMatch[1] : '';
+          
+          // Extract summary/description
+          const summaryMatch = articleHtml.match(/<p[^>]*>([^<]+)<\/p>/i);
+          const summary = summaryMatch ? summaryMatch[1].trim() : '';
+          
+          if (title && !title.includes('Advertisement')) {
+            articles.push({
+              title,
+              url: url.startsWith('http') ? url : (url.startsWith('/') ? `https://nytimes.com${url}` : url),
+              summary: summary.substring(0, 200),
+              author: '',
+              section: ''
+            });
+          }
+        }
+      }
+      
+      // If we couldn't find articles with patterns, try finding headlines
+      if (articles.length === 0) {
+        const headlineMatches = html.matchAll(/<h[1-3][^>]*>(<a[^>]*href="([^"]+)"[^>]*>)?([^<]+)(<\/a>)?<\/h[1-3]>/gi);
+        for (const match of headlineMatches) {
+          if (articles.length >= 10) break;
+          const url = match[2] || '';
+          const title = match[3].trim();
+          if (title && !title.includes('Advertisement') && !title.includes('Subscribe')) {
+            articles.push({
+              title,
+              url: url.startsWith('http') ? url : (url.startsWith('/') ? `https://nytimes.com${url}` : url),
+              summary: '',
+              author: '',
+              section: ''
+            });
+          }
+        }
+      }
+      
+      return {
+        articles: articles.slice(0, 10),
+        extractedAt: new Date().toISOString(),
+        totalFound: articles.length
+      };
+    }
+    
+    // For product/price extraction
+    if (instructions && instructions.includes('product') && instructions.includes('price')) {
+      const products = [];
+      
+      // Common e-commerce patterns
+      const productPatterns = [
+        /<div[^>]*class="[^"]*product[^"]*"[^>]*>([\\s\\S]*?)<\/div>/gi,
+        /<li[^>]*class="[^"]*item[^"]*"[^>]*>([\\s\\S]*?)<\/li>/gi
+      ];
+      
+      for (const pattern of productPatterns) {
+        const matches = html.matchAll(pattern);
+        for (const match of matches) {
+          const productHtml = match[0];
+          
+          // Extract product name
+          const nameMatch = productHtml.match(/<(?:h[1-5]|span|div)[^>]*>([^<]+)</i);
+          const name = nameMatch ? nameMatch[1].trim() : '';
+          
+          // Extract price
+          const priceMatch = productHtml.match(/\$([\\d,]+\.?\d*)/i);
+          const price = priceMatch ? `$${priceMatch[1]}` : '';
+          
+          if (name && price) {
+            products.push({ name, price, rating: '' });
+          }
+        }
+      }
+      
+      return products;
+    }
+    
+    // Default: return existing data with extraction note
+    return {
+      ...existingData,
+      extractionNote: 'Structured extraction applied',
+      instructions: instructions,
+      postProcessing: postProcessing
+    };
+    
+  } catch (error) {
+    console.error('Structured extraction failed:', error);
+    // Fall back to existing data
+    return existingData;
+  }
+}
+
 // Enhanced extraction with multiple format support
 async function performExtraction(jobId, params) {
   const startTime = Date.now();
@@ -363,6 +482,17 @@ async function performExtraction(jobId, params) {
       // Placeholder for screenshot functionality
       result.data.screenshot = null;
       result.data.screenshotMessage = "Screenshot capture requires browser automation (not available in basic mode)";
+    }
+    
+    // Handle structured format with extraction instructions
+    if (formats.includes('structured') && params.extractionInstructions) {
+      result.data = processStructuredExtraction(
+        html, 
+        params.extractionInstructions,
+        params.outputSchema,
+        params.postProcessing,
+        result.data
+      );
     }
     
     // Update job with result
