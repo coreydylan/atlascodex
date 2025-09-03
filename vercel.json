@@ -1,9 +1,32 @@
 {
-  "buildCommand": "echo 'Static site - no build needed'",
-  "outputDirectory": ".",
-  "installCommand": "echo 'No dependencies to install'",
-  "framework": null,
-  "rewrites": [],
+  "version": 2,
+  "builds": [
+    {
+      "src": "packages/frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist"
+      }
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/packages/frontend/dist/index.html"
+    }
+  ],
+  "env": {
+    "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
+    "VITE_API_KEY": "test-key-123",
+    "VITE_ENVIRONMENT": "production"
+  },
+  "build": {
+    "env": {
+      "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
+      "VITE_API_KEY": "test-key-123",
+      "VITE_ENVIRONMENT": "production"
+    }
+  },
   "headers": [
     {
       "source": "/(.*)",
@@ -15,6 +38,14 @@
         {
           "key": "X-Content-Type-Options", 
           "value": "nosniff"
+        },
+        {
+          "key": "X-XSS-Protection",
+          "value": "1; mode=block"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
         }
       ]
     }

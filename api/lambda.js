@@ -3,9 +3,97 @@ const { DynamoDBClient, PutItemCommand, GetItemCommand, ScanCommand } = require(
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { processNaturalLanguage } = require('./atlas-generator-integration');
 const { processWithPlanBasedSystem } = require('./worker-enhanced');
+const { processWithEvidenceFirstSystem } = require('./evidence-first-bridge');
 
 const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const sqs = new SQSClient({ region: process.env.AWS_REGION || 'us-west-2' });
+
+// Comprehensive function to clean extraction results for JSON serialization
+function cleanExtractionResult(result) {
+  const seen = new WeakSet();
+  
+  function clean(obj) {
+    // Handle primitives
+    if (obj === null || typeof obj !== 'object') {
+      return obj;
+    }
+    
+    // Handle circular references
+    if (seen.has(obj)) {
+      return '[Circular Reference]';
+    }
+    seen.add(obj);
+    
+    // Handle arrays
+    if (Array.isArray(obj)) {
+      return obj.map(item => clean(item));
+    }
+    
+    // Handle DOM nodes and Cheerio objects
+    if (obj.constructor?.name === 'Element' || 
+        obj.constructor?.name === 'Text' || 
+        obj.constructor?.name === 'Document' || 
+        obj.constructor?.name === 'LoadedCheerio' ||
+        obj.tagName || 
+        obj.nodeType !== undefined || 
+        obj._root ||
+        obj.cheerio) {
+      return '[DOM Node]';
+    }
+    
+    // Handle functions
+    if (typeof obj === 'function') {
+      return '[Function]';
+    }
+    
+    // Handle special objects that cause serialization issues
+    const cleanObj = {};
+    for (const [key, value] of Object.entries(obj)) {
+      // Skip problematic DOM-related keys
+      if (key === 'document' || key === 'dom' || key === 'node' || key === 'parent' || 
+          key === 'children' || key === 'prev' || key === 'next' || key === 'previousSibling' || 
+          key === 'nextSibling' || key === 'parentNode' || key === 'childNodes' ||
+          key === 'ownerDocument' || key === 'firstChild' || key === 'lastChild' ||
+          key === '_root' || key === 'cheerio' || key === 'options') {
+        continue;
+      }
+      
+      // Skip internal execution traces and plan objects that are too complex
+      if (key === 'executionTrace' || key === 'planExecution' || key === 'domAnalysis') {
+        // Keep only essential info
+        if (value && typeof value === 'object') {
+          cleanObj[key] = {
+            status: value.status || 'completed',
+            timestamp: value.timestamp || new Date().toISOString()
+          };
+        }
+        continue;
+      }
+      
+      // Recursively clean the value
+      try {
+        cleanObj[key] = clean(value);
+      } catch (err) {
+        console.warn(`Skipping problematic key ${key}:`, err.message);
+        cleanObj[key] = '[Serialization Error]';
+      }
+    }
+    
+    return cleanObj;
+  }
+  
+  try {
+    return clean(result);
+  } catch (err) {
+    console.error('Failed to clean extraction result:', err);
+    // Return a safe fallback
+    return {
+      success: false,
+      error: 'Result serialization failed',
+      timestamp: new Date().toISOString()
+    };
+  }
+}
 
 // CORS headers
 const corsHeaders = {
@@ -116,23 +204,20 @@ async function handleExtract(method, body, headers) {
           formats: params.formats || ['structured']
         };
         
-        // Process with our improved plan-based system
-        const extractionResult = await processWithPlanBasedSystem(htmlContent, extractionParams);
+        // Process with evidence-first enhanced system
+        const extractionResult = await processWithEvidenceFirstSystem(htmlContent, extractionParams);
+        
+        // Clean extraction result for JSON serialization
+        const cleanResult = cleanExtractionResult(extractionResult);
         
         // Update job with results
         const completedJob = {
           id: { S: jobId },
           type: { S: 'extract' },
-          status: { S: extractionResult.success ? 'completed' : 'failed' },
+          status: { S: cleanResult.success ? 'completed' : 'failed' },
           url: { S: params.url },
           params: { S: JSON.stringify(params) },
-          result: { S: JSON.stringify({
-            success: extractionResult.success,
-            data: extractionResult.data || null,
-            metadata: extractionResult.metadata || {},
-            evidence: extractionResult.evidence || null,
-            error: extractionResult.error || null
-          })},
+          result: { S: JSON.stringify(cleanResult)},
           createdAt: { N: Date.now().toString() },
           updatedAt: { N: Date.now().toString() }
         };
@@ -150,15 +235,9 @@ async function handleExtract(method, body, headers) {
         // Return immediate results
         return createResponse(200, {
           jobId,
-          status: extractionResult.success ? 'completed' : 'failed',
+          status: cleanResult.success ? 'completed' : 'failed',
           message: 'Extraction completed',
-          result: {
-            success: extractionResult.success,
-            data: extractionResult.data || null,
-            metadata: extractionResult.metadata || {},
-            evidence: extractionResult.evidence || null,
-            error: extractionResult.error || null
-          }
+          result: cleanResult
         });
         
       } catch (processingError) {
@@ -308,27 +387,11 @@ exports.handler = async (event) => {
             
             console.log('Processing with plan-based system:', extractionParams);
             
-            // Process with our improved plan-based system
-            const extractionResult = await processWithPlanBasedSystem(htmlContent, extractionParams);
+            // Process with evidence-first enhanced system
+            const extractionResult = await processWithEvidenceFirstSystem(htmlContent, extractionParams);
             
-            // Ensure result is serializable (remove any circular references)
-            const cleanResult = JSON.parse(JSON.stringify(extractionResult, (key, value) => {
-              // Remove DOM-related circular references
-              if (key === 'document' || key === 'dom' || key === 'node' || key === 'parent' || 
-                  key === 'children' || key === 'prev' || key === 'next' || key === 'previousSibling' || 
-                  key === 'nextSibling' || key === 'parentNode' || key === 'childNodes' ||
-                  key === 'ownerDocument' || key === 'firstChild' || key === 'lastChild') {
-                return undefined;
-              }
-              // Also skip objects that look like DOM elements/nodes or Cheerio objects
-              if (value && typeof value === 'object' && 
-                  (value.constructor?.name === 'Element' || value.constructor?.name === 'Text' || 
-                   value.constructor?.name === 'Document' || value.constructor?.name === 'LoadedCheerio' ||
-                   value.tagName || value.nodeType || value._root)) {
-                return '[DOM Node]';
-              }
-              return value;
-            }));
+            // Clean extraction result for JSON serialization
+            const cleanResult = cleanExtractionResult(extractionResult);
             
             // Return immediate results with AI context
             return createResponse(200, {
