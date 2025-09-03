@@ -3,28 +3,7 @@
   "outputDirectory": ".",
   "installCommand": "echo 'No dependencies to install'",
   "framework": null,
-  "rewrites": [
-    {
-      "source": "/api/templates/recommend",
-      "destination": "/api/templates/index.js"
-    },
-    {
-      "source": "/api/templates/extract", 
-      "destination": "/api/templates/index.js"
-    },
-    {
-      "source": "/api/templates/stats",
-      "destination": "/api/templates/index.js"
-    },
-    {
-      "source": "/api/templates/eval",
-      "destination": "/api/templates/index.js"
-    },
-    {
-      "source": "/api/templates/health",
-      "destination": "/api/templates/index.js"
-    }
-  ],
+  "rewrites": [],
   "headers": [
     {
       "source": "/(.*)",
