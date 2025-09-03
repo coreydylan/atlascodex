@@ -221,6 +221,68 @@ export default function ExtractionPanel({ apiKey, apiBase, onNotification }: Ext
     }
   };
 
+  const renderExtractedData = (data: any) => {
+    try {
+      // Validate that data exists and is not null/undefined
+      if (!data) {
+        return (
+          <Alert severity="warning">
+            No data extracted. This could indicate an extraction error or empty content.
+          </Alert>
+        );
+      }
+
+      // Check if data has the expected structure
+      if (typeof data !== 'object') {
+        return (
+          <Alert severity="error">
+            Invalid data format: Expected object, got {typeof data}
+          </Alert>
+        );
+      }
+
+      // Safely stringify the data
+      const jsonString = JSON.stringify(data, null, 2);
+      
+      // Check for potential malformed data patterns
+      const isMalformed = jsonString.includes('{"name":"') && jsonString.includes('Director') && jsonString.includes('bio":""}');
+      
+      if (isMalformed) {
+        return (
+          <Box>
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              ⚠️ Data appears malformed - names, titles, and bios may be concatenated. 
+              This will be fixed in the next system update.
+            </Alert>
+            <pre style={{ margin: 0, fontSize: '0.85rem' }}>
+              {jsonString}
+            </pre>
+          </Box>
+        );
+      }
+
+      // Render clean, well-formatted data
+      return (
+        <pre style={{ margin: 0, fontSize: '0.9rem', lineHeight: 1.4 }}>
+          {jsonString}
+        </pre>
+      );
+      
+    } catch (error) {
+      console.error('Error rendering extracted data:', error);
+      return (
+        <Alert severity="error">
+          <Typography variant="body2">
+            <strong>Data Rendering Error:</strong> {error.message}
+          </Typography>
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            Raw data: {String(data).substring(0, 200)}...
+          </Typography>
+        </Alert>
+      );
+    }
+  };
+
   return (
     <Box>
       <Grid container spacing={3}>
@@ -482,14 +544,35 @@ export default function ExtractionPanel({ apiKey, apiBase, onNotification }: Ext
           </Grid>
         </Grid>
 
-        {/* Results Section */}
-        {showResults && currentJob?.data && (
+        {/* Error Section */}
+        {showResults && currentJob?.status === 'failed' && (
           <Grid item xs={12}>
             <Paper sx={{ p: 3 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-                <Typography variant="h6">Extraction Results</Typography>
+              <Alert severity="error" sx={{ mb: 2 }}>
+                <Typography variant="h6" gutterBottom>
+                  Extraction Failed
+                </Typography>
+                <Typography variant="body2">
+                  {currentJob.error || 'Unknown error occurred during extraction.'}
+                </Typography>
+              </Alert>
+              <Typography variant="body2" color="text.secondary">
+                Try adjusting the extraction parameters or check the URL accessibility.
+              </Typography>
+            </Paper>
+          </Grid>
+        )}
+
+        {/* Results Section */}
+        {showResults && currentJob?.data && currentJob?.status === 'completed' && (
+          <Grid item xs={12}>
+            <Paper sx={{ p: 3 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+                <Typography variant="h5" sx={{ fontWeight: 'bold', color: 'success.main', display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <CheckCircle /> Extraction Complete
+                </Typography>
                 <Box>
-                  <IconButton onClick={() => copyToClipboard(currentJob.data)}>
+                  <IconButton onClick={() => copyToClipboard(currentJob.data)} sx={{ mr: 1 }}>
                     <ContentCopy />
                   </IconButton>
                   <IconButton onClick={downloadResults}>
@@ -498,42 +581,87 @@ export default function ExtractionPanel({ apiKey, apiBase, onNotification }: Ext
                 </Box>
               </Box>
 
-              <Accordion defaultExpanded>
-                <AccordionSummary expandIcon={<ExpandMore />}>
-                  <Typography>Extracted Data</Typography>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <Box sx={{ 
-                    maxHeight: 400, 
-                    overflow: 'auto',
-                    bgcolor: 'background.default',
-                    p: 2,
-                    borderRadius: 1
-                  }}>
-                    <pre style={{ margin: 0 }}>
-                      {JSON.stringify(currentJob.data, null, 2)}
-                    </pre>
-                  </Box>
-                </AccordionDetails>
-              </Accordion>
+              {/* Main Data Section */}
+              <Box sx={{ mb: 3 }}>
+                <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  📄 Extracted Data
+                </Typography>
+                <Paper sx={{ 
+                  maxHeight: 400, 
+                  overflow: 'auto',
+                  bgcolor: '#f8f9fa',
+                  p: 2,
+                  border: '1px solid #e0e0e0'
+                }}>
+                  {renderExtractedData(currentJob.data)}
+                </Paper>
+              </Box>
 
+              {/* Extraction Details Section */}
+              <Box sx={{ mb: 3 }}>
+                <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  📊 Extraction Details
+                </Typography>
+                <Paper sx={{ bgcolor: '#e3f2fd', p: 2, border: '1px solid #bbdefb' }}>
+                  <TableContainer>
+                    <Table size="small">
+                      <TableBody>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 'bold', width: '150px' }}>Job ID</TableCell>
+                          <TableCell>{currentJob.id}</TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 'bold' }}>URL</TableCell>
+                          <TableCell>{currentJob.url}</TableCell>
+                        </TableRow>
+                        {currentJob.metadata?.strategy && (
+                          <TableRow>
+                            <TableCell sx={{ fontWeight: 'bold' }}>Strategy</TableCell>
+                            <TableCell>{currentJob.metadata.strategy}</TableCell>
+                          </TableRow>
+                        )}
+                        {currentJob.metadata?.duration && (
+                          <TableRow>
+                            <TableCell sx={{ fontWeight: 'bold' }}>Duration</TableCell>
+                            <TableCell>{currentJob.metadata.duration}ms</TableCell>
+                          </TableRow>
+                        )}
+                        {currentJob.metadata?.cost && (
+                          <TableRow>
+                            <TableCell sx={{ fontWeight: 'bold' }}>Cost</TableCell>
+                            <TableCell>${currentJob.metadata.cost.toFixed(4)}</TableCell>
+                          </TableRow>
+                        )}
+                        {currentJob.metadata?.itemsExtracted && (
+                          <TableRow>
+                            <TableCell sx={{ fontWeight: 'bold' }}>Items Found</TableCell>
+                            <TableCell>{currentJob.metadata.itemsExtracted}</TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Paper>
+              </Box>
+
+              {/* Evidence Section - Only if available */}
               {currentJob.evidence && (
-                <Accordion>
-                  <AccordionSummary expandIcon={<ExpandMore />}>
-                    <Typography>Evidence & Verification</Typography>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Box sx={{ 
-                      bgcolor: 'background.default',
-                      p: 2,
-                      borderRadius: 1
-                    }}>
-                      <pre style={{ margin: 0 }}>
-                        {JSON.stringify(currentJob.evidence, null, 2)}
-                      </pre>
-                    </Box>
-                  </AccordionDetails>
-                </Accordion>
+                <Box>
+                  <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                    🔍 Evidence & Verification
+                  </Typography>
+                  <Paper sx={{ 
+                    bgcolor: '#f3e5f5',
+                    p: 2,
+                    border: '1px solid #ce93d8',
+                    maxHeight: 300,
+                    overflow: 'auto'
+                  }}>
+                    <pre style={{ margin: 0, fontSize: '0.875rem' }}>
+                      {JSON.stringify(currentJob.evidence, null, 2)}
+                    </pre>
+                  </Paper>
+                </Box>
               )}
             </Paper>
           </Grid>

@@ -89,7 +89,52 @@ jobs:
           cache-from: type=registry,ref=atlascodex/frontend:buildcache
           cache-to: type=registry,ref=atlascodex/frontend:buildcache,mode=max
 
-  deploy-staging:
+  deploy-lambda-staging:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Install Serverless Framework
+        run: npm install -g serverless@3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Deploy Lambda to Staging
+        run: |
+          serverless deploy --stage staging
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MASTER_API_KEY: ${{ secrets.MASTER_API_KEY_STAGING }}
+      
+      - name: Test Lambda Staging Deployment
+        run: |
+          # Wait for deployment to be ready
+          sleep 30
+          # Test health endpoint
+          LAMBDA_URL=$(aws apigateway get-rest-apis --query "items[?name=='atlas-codex-staging'].id" --output text)
+          curl -f "https://${LAMBDA_URL}.execute-api.us-west-2.amazonaws.com/staging/health" || exit 1
+
+  deploy-ecs-staging:
     needs: build-docker
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
@@ -122,13 +167,58 @@ jobs:
             --service atlas-frontend \
             --force-new-deployment
       
-      - name: Wait for deployment
+      - name: Wait for ECS deployment
         run: |
           aws ecs wait services-stable \
             --cluster atlas-staging \
             --services atlas-api atlas-worker atlas-frontend
 
-  deploy-production:
+  deploy-lambda-production:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/production'
+    environment: production
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Install Serverless Framework
+        run: npm install -g serverless@3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Deploy Lambda to Production
+        run: |
+          serverless deploy --stage production
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MASTER_API_KEY: ${{ secrets.MASTER_API_KEY_PRODUCTION }}
+      
+      - name: Test Lambda Production Deployment
+        run: |
+          # Wait for deployment to be ready
+          sleep 30
+          # Test health endpoint
+          LAMBDA_URL=$(aws apigateway get-rest-apis --query "items[?name=='atlas-codex-production'].id" --output text)
+          curl -f "https://${LAMBDA_URL}.execute-api.us-west-2.amazonaws.com/production/health" || exit 1
+
+  deploy-ecs-production:
     needs: build-docker
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/production'
@@ -161,21 +251,26 @@ jobs:
             --service atlas-frontend \
             --force-new-deployment
       
-      - name: Wait for deployment
+      - name: Wait for ECS deployment
         run: |
           aws ecs wait services-stable \
             --cluster atlas-production \
             --services atlas-api atlas-worker atlas-frontend
       
-      - name: Run smoke tests
+      - name: Run comprehensive smoke tests
         run: |
+          # Test ECS endpoints
           curl -f https://api.atlascodex.com/health
           curl -f https://app.atlascodex.com
+          
+          # Test Lambda endpoint
+          LAMBDA_URL=$(aws apigateway get-rest-apis --query "items[?name=='atlas-codex-production'].id" --output text)
+          curl -f "https://${LAMBDA_URL}.execute-api.us-west-2.amazonaws.com/production/health"
       
       - name: Notify deployment
         uses: 8398a7/action-slack@v3
         with:
           status: ${{ job.status }}
-          text: 'Production deployment completed!'
+          text: 'Production deployment completed! Both ECS and Lambda services are live.'
           webhook_url: ${{ secrets.SLACK_WEBHOOK }}
         if: always()

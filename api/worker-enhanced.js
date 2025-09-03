@@ -1,6 +1,7 @@
 // Atlas Codex Enhanced Worker - Full extraction functionality with skill-based processing
 const { DynamoDBClient, UpdateItemCommand } = require('@aws-sdk/client-dynamodb');
 const cheerio = require('cheerio');
+const ProductionAccuracyMonitor = require('../packages/worker/monitoring/production-accuracy-monitor').default;
 
 // Initialize clients
 const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-west-2' });
@@ -140,6 +141,313 @@ const SKILLS_REGISTRY = {
 };
 
 /**
+ * Block Classifier using Snorkel-style weak supervision
+ * Uses multiple labeling functions to soft-label blocks without gold datasets
+ */
+class BlockClassifier {
+  constructor() {
+    this.labelingFunctions = [
+      this.LF1_headingLooksLikeName,
+      this.LF2_siblingHasRoleWords,
+      this.LF3_highLinkDensity,
+      this.LF4_shortCommaLines,
+      this.LF5_hasPersonSchema,
+      this.LF6_profileKeywords,
+      this.LF7_boardPattern
+    ];
+  }
+
+  /**
+   * Classify a semantic block using weak supervision
+   */
+  classifyBlock(block, context = {}) {
+    const votes = {};
+    const evidence = {};
+    
+    // Apply each labeling function
+    this.labelingFunctions.forEach(lf => {
+      const result = lf.call(this, block, context);
+      if (result.label && result.confidence > 0.1) {
+        if (!votes[result.label]) votes[result.label] = [];
+        votes[result.label].push({
+          confidence: result.confidence,
+          evidence: result.reason,
+          function: lf.name
+        });
+        evidence[lf.name] = result.reason;
+      }
+    });
+
+    // Combine votes using confidence-weighted majority
+    return this.combineVotes(votes, evidence);
+  }
+
+  /**
+   * Combine labeling function votes using confidence weighting
+   */
+  combineVotes(votes, evidence) {
+    if (Object.keys(votes).length === 0) {
+      return {
+        label: 'other',
+        confidence: 0.1,
+        evidence: 'no labeling functions matched'
+      };
+    }
+
+    // Calculate weighted confidence for each label
+    const labelScores = {};
+    Object.entries(votes).forEach(([label, labelVotes]) => {
+      const totalConfidence = labelVotes.reduce((sum, vote) => sum + vote.confidence, 0);
+      const avgConfidence = totalConfidence / labelVotes.length;
+      const voteStrength = labelVotes.length; // More functions agreeing = higher strength
+      
+      labelScores[label] = {
+        score: avgConfidence * (1 + voteStrength * 0.1), // Bonus for agreement
+        votes: labelVotes.length,
+        avgConfidence: avgConfidence,
+        evidence: labelVotes.map(v => v.evidence).join('; ')
+      };
+    });
+
+    // Pick highest scoring label
+    const bestLabel = Object.entries(labelScores)
+      .sort(([,a], [,b]) => b.score - a.score)[0];
+
+    return {
+      label: bestLabel[0],
+      confidence: Math.min(0.95, bestLabel[1].score),
+      votes: bestLabel[1].votes,
+      evidence: bestLabel[1].evidence,
+      allScores: labelScores
+    };
+  }
+
+  // =============================================================================
+  // LABELING FUNCTIONS - Each returns {label, confidence, reason} or null
+  // =============================================================================
+
+  /**
+   * LF1: Heading looks like a person's name
+   */
+  LF1_headingLooksLikeName(block, context) {
+    if (!block.heading) return { label: null, confidence: 0 };
+    
+    const heading = block.heading.trim();
+    const hasPersonName = this.looksLikePersonName(heading);
+    
+    if (hasPersonName) {
+      return {
+        label: 'profile_card',
+        confidence: 0.8,
+        reason: `Heading "${heading}" looks like a person name`
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF2: Block has sibling with role words
+   */
+  LF2_siblingHasRoleWords(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    const roleWords = ['director', 'manager', 'executive', 'assistant', 'coordinator', 
+                      'specialist', 'analyst', 'officer', 'president', 'vice', 'chief',
+                      'senior', 'junior', 'lead', 'head', 'supervisor', 'administrator'];
+    
+    const siblingText = block.element.siblings().text().toLowerCase();
+    const blockText = block.element.text().toLowerCase();
+    const combinedText = siblingText + ' ' + blockText;
+    
+    const roleMatches = roleWords.filter(word => combinedText.includes(word));
+    
+    if (roleMatches.length > 0) {
+      return {
+        label: 'profile_card',
+        confidence: Math.min(0.7, 0.3 + roleMatches.length * 0.1),
+        reason: `Contains role words: ${roleMatches.join(', ')}`
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF3: High link density suggests navigation/menu
+   */
+  LF3_highLinkDensity(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    const links = block.element.find('a');
+    const textLength = block.element.text().length;
+    const linkDensity = textLength > 0 ? (links.length * 20) / textLength : 0;
+    
+    if (linkDensity > 0.15) {
+      return {
+        label: 'nav',
+        confidence: Math.min(0.9, 0.5 + linkDensity * 2),
+        reason: `High link density: ${linkDensity.toFixed(3)} (${links.length} links, ${textLength} chars)`
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF4: Short lines with commas suggest person listings
+   */
+  LF4_shortCommaLines(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    const text = block.element.text();
+    const lines = text.split('\n').filter(line => line.trim().length > 5);
+    
+    if (lines.length < 3) return { label: null, confidence: 0 };
+    
+    let commaLineCount = 0;
+    let shortLineCount = 0;
+    
+    lines.forEach(line => {
+      line = line.trim();
+      if (line.includes(',')) commaLineCount++;
+      if (line.length < 80) shortLineCount++;
+    });
+    
+    const commaRatio = commaLineCount / lines.length;
+    const shortRatio = shortLineCount / lines.length;
+    
+    if (commaRatio > 0.6 && shortRatio > 0.7) {
+      return {
+        label: 'board_list',
+        confidence: 0.8,
+        reason: `${lines.length} lines, ${(commaRatio * 100).toFixed(0)}% have commas, ${(shortRatio * 100).toFixed(0)}% are short`
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF5: Has structured data with person schema
+   */
+  LF5_hasPersonSchema(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    const hasPersonSchema = block.element.find('[itemtype*="Person"], [typeof*="Person"]').length > 0;
+    const hasPersonClass = block.element.attr('class')?.toLowerCase().includes('person') || 
+                         block.element.find('[class*="person"], [class*="staff"], [class*="team"]').length > 0;
+    
+    if (hasPersonSchema) {
+      return {
+        label: 'profile_card',
+        confidence: 0.9,
+        reason: 'Has Person schema markup'
+      };
+    }
+    
+    if (hasPersonClass) {
+      return {
+        label: 'profile_card', 
+        confidence: 0.6,
+        reason: 'Has person-related CSS classes'
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF6: Contains profile-related keywords
+   */
+  LF6_profileKeywords(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    const profileKeywords = ['bio', 'biography', 'about', 'experience', 'background', 
+                            'education', 'graduated', 'university', 'degree', 'joined',
+                            'email', '@', 'phone', 'linkedin', 'twitter'];
+    
+    const blockText = block.element.text().toLowerCase();
+    const matches = profileKeywords.filter(keyword => blockText.includes(keyword));
+    
+    if (matches.length >= 2) {
+      return {
+        label: 'profile_card',
+        confidence: Math.min(0.7, 0.3 + matches.length * 0.08),
+        reason: `Contains profile keywords: ${matches.join(', ')}`
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * LF7: Matches board/staff listing patterns
+   */
+  LF7_boardPattern(block, context) {
+    if (!block.element) return { label: null, confidence: 0 };
+    
+    // Only check immediate parent/sibling context, not deep hierarchy
+    const parentText = block.element.parent().text().toLowerCase();
+    const prevSiblingText = block.element.prev().text().toLowerCase();
+    const nextSiblingText = block.element.next().text().toLowerCase();
+    const immediateContext = parentText + ' ' + prevSiblingText + ' ' + nextSiblingText;
+    
+    const boardPatterns = ['board of directors', 'board members', 'board of trustees', 
+                         'advisory board', 'governing board', 'trustees'];
+    
+    // Only match if board patterns are in immediate context (not distant)
+    const hasBoardContext = boardPatterns.some(pattern => immediateContext.includes(pattern));
+    
+    // Additional check: if this block contains detailed bio info, it's probably a profile card not a list
+    const blockText = block.element.text().toLowerCase();
+    const hasDetailedBio = blockText.length > 200 && (
+      blockText.includes('experience') || 
+      blockText.includes('education') || 
+      blockText.includes('background') ||
+      blockText.includes('joined') ||
+      blockText.includes('graduated')
+    );
+    
+    if (hasBoardContext && !hasDetailedBio) {
+      return {
+        label: 'person_list',
+        confidence: 0.85,
+        reason: 'Appears under board/trustees heading context'
+      };
+    }
+    
+    return { label: null, confidence: 0 };
+  }
+
+  /**
+   * Check if text looks like a person's name
+   */
+  looksLikePersonName(text) {
+    if (!text || text.length < 3 || text.length > 50) return false;
+    
+    // Clean and check basic format
+    const cleaned = text.replace(/[.,\-()]/g, '').trim();
+    const words = cleaned.split(/\s+/);
+    
+    // Should have 1-4 words for a name
+    if (words.length < 1 || words.length > 4) return false;
+    
+    // Each word should start with capital letter
+    if (!words.every(word => /^[A-Z]/.test(word))) return false;
+    
+    // Should not contain numbers or special characters (except common name chars)
+    if (/[0-9@#$%^&*()_+=\[\]{}|\\:";'<>?\/]/.test(cleaned)) return false;
+    
+    // Should not be common non-name phrases
+    const nonNamePhrases = ['STAFF', 'TEAM', 'ABOUT US', 'CONTACT', 'HOME', 'BOARD'];
+    if (nonNamePhrases.includes(cleaned.toUpperCase())) return false;
+    
+    return true;
+  }
+}
+
+/**
  * Plan Executor - Runs skill plans step by step, logging traces for learning
  */
 class PlanExecutor {
@@ -222,6 +530,13 @@ class PlanExecutor {
       // Check preconditions
       const preconditionsValid = this.checkPreconditions(skillDef.preconditions);
       if (!preconditionsValid) {
+        console.log(`🐛 Precondition check failed for ${step.skill}:`, {
+          required: skillDef.preconditions,
+          contextKeys: Array.from(this.context.keys()),
+          hasSemanticBlocks: this.context.has('semantic_blocks'),
+          hasContentBlocks: this.context.has('content_blocks'), 
+          hasTargetSchema: this.context.has('target_schema')
+        });
         throw new Error(`Preconditions not met for ${step.skill}`);
       }
       
@@ -524,6 +839,14 @@ class PlanExecutor {
     const metaData = this.context.get('meta_data') || {};
     const targetSchema = this.context.get('target_schema');
     
+    console.log('🐛 MapFields context check:', {
+      semanticBlocksCount: semanticBlocks.length,
+      hasStructuredData: !!Object.keys(structuredData).length,
+      hasMetaData: !!Object.keys(metaData).length,
+      hasTargetSchema: !!targetSchema,
+      contextKeys: Array.from(this.context.keys())
+    });
+    
     if (!targetSchema) return { success: false, error: 'No target schema available' };
     
     try {
@@ -751,7 +1074,8 @@ class PlanExecutor {
       const passBInputs = {
         ...initialInputs,
         top_candidates: passAResult.data,
-        candidate_scores: passAResult.context_final?.candidate_scores || []
+        candidate_scores: passAResult.context_final?.candidate_scores || [],
+        semantic_blocks: passAResult.context_final?.semantic_blocks || []
       };
       
       // Execute Pass B (Enrich)
@@ -873,35 +1197,58 @@ class PlanExecutor {
   // =============================================================================
   
   /**
-   * Weak supervision system using multiple labeling functions (LFs) 
+   * Weak supervision system using BlockClassifier with labeling functions 
    * to classify semantic blocks without manual labeling
    */
   applyWeakSupervision(semanticBlocks) {
     console.log('🏷️ Applying weak supervision to', semanticBlocks.length, 'blocks');
     
-    const labeledBlocks = semanticBlocks.map(block => {
-      const labels = this.applyLabelingFunctions(block);
-      const softLabel = this.combineLabelVotes(labels);
+    const blockClassifier = this.getBlockClassifier();
+    
+    const labeledBlocks = semanticBlocks.map((block, idx) => {
+      const classification = blockClassifier.classifyBlock(block, { 
+        pageContext: this.context.get('page_context') || {}
+      });
+      
+      console.log(`🐛 Block ${idx}: "${(block.heading || '').substring(0, 30)}" → ${classification.label} (${classification.confidence.toFixed(3)}) - ${classification.evidence}`);
       
       return {
         ...block,
-        weak_labels: labels,
-        predicted_type: softLabel.type,
-        type_confidence: softLabel.confidence,
-        labeling_agreement: softLabel.agreement
+        predicted_type: classification.label,
+        type_confidence: classification.confidence,
+        labeling_votes: classification.votes || 0,
+        classification_evidence: classification.evidence,
+        all_scores: classification.allScores
       };
     });
     
-    // Filter by predicted type and confidence
+    // Use unified thresholds for filtering
+    const thresholds = this.getUnifiedThresholds();
+    
+    // Filter by predicted type and confidence  
     const profileBlocks = labeledBlocks.filter(block => 
       block.predicted_type === 'profile_card' && 
-      block.type_confidence >= 0.6
+      block.type_confidence >= thresholds.weak_supervision_min
     );
     
-    console.log(`🎯 Weak supervision filtered: ${semanticBlocks.length} → ${profileBlocks.length} profile candidates`);
-    console.log(`📊 Labeling agreement: ${profileBlocks.length > 0 ? (profileBlocks.reduce((sum, b) => sum + b.labeling_agreement, 0) / profileBlocks.length).toFixed(2) : 'N/A'}`);
+    // Also filter out navigation and board blocks using unified thresholds
+    const finalBlocks = labeledBlocks.filter(block => {
+      if (block.predicted_type === 'nav' && block.type_confidence > thresholds.nav_filter_threshold) {
+        console.log(`🚫 Filtering out nav block (conf=${block.type_confidence.toFixed(2)}): ${block.classification_evidence}`);
+        return false;
+      }
+      if (block.predicted_type === 'board_list' && block.type_confidence > thresholds.board_filter_threshold) {
+        console.log(`🚫 Filtering out board block (conf=${block.type_confidence.toFixed(2)}): ${block.classification_evidence}`);
+        return false;
+      }
+      // Keep profile cards and uncertain blocks for further processing
+      return block.predicted_type === 'profile_card' || block.type_confidence < thresholds.nav_filter_threshold;
+    });
     
-    return profileBlocks;
+    console.log(`🎯 Weak supervision filtered: ${semanticBlocks.length} → ${finalBlocks.length} candidates (${profileBlocks.length} high-confidence profiles)`);
+    console.log(`📊 Avg confidence: ${finalBlocks.length > 0 ? (finalBlocks.reduce((sum, b) => sum + b.type_confidence, 0) / finalBlocks.length).toFixed(2) : 'N/A'}`);
+    
+    return finalBlocks;
   }
   
   /**
@@ -1908,6 +2255,73 @@ class PlanExecutor {
   }
   
   // =============================================================================
+  // UNIFIED THRESHOLD MANAGEMENT SYSTEM
+  // Centralized threshold management from plan constraints - Phase 1.6
+  // =============================================================================
+
+  /**
+   * Get unified thresholds from plan constraints with fallback defaults
+   * Single source of truth for all quality thresholds throughout the system
+   */
+  getUnifiedThresholds() {
+    const plan = this.context.get('currentPlan') || {};
+    const constraints = plan.constraints || {};
+    
+    return {
+      // Core confidence thresholds
+      mapfields_conf_min: constraints.mapfields_conf_min || 0.35,
+      final_quality_min: constraints.final_quality_min || 0.45,
+      validation_threshold: constraints.validation_threshold || 0.4,
+      citation_confidence: constraints.citation_confidence || 0.3,
+      
+      // Block classification thresholds
+      weak_supervision_min: constraints.weak_supervision_min || 0.6,
+      nav_filter_threshold: constraints.nav_filter_threshold || 0.8,
+      board_filter_threshold: constraints.board_filter_threshold || 0.7,
+      
+      // Result limits
+      max_results: constraints.max_results || 50,
+      max_candidates: constraints.max_candidates || 15,
+      
+      // Quality and performance
+      quality_threshold: constraints.quality_threshold || 0.3,
+      confidence_calibration_min: constraints.confidence_calibration_min || 0.5
+    };
+  }
+
+  /**
+   * Update plan constraints with unified thresholds
+   */
+  updatePlanConstraints(overrides = {}) {
+    const plan = this.context.get('currentPlan') || {};
+    const currentThresholds = this.getUnifiedThresholds();
+    
+    plan.constraints = {
+      ...plan.constraints,
+      ...currentThresholds,
+      ...overrides
+    };
+    
+    this.context.set('currentPlan', plan);
+    console.log('📊 Updated unified thresholds:', plan.constraints);
+  }
+
+  // =============================================================================
+  // BLOCK CLASSIFIER & WEAK SUPERVISION SYSTEM
+  // Snorkel-style labeling functions for block classification without manual labels
+  // =============================================================================
+
+  /**
+   * Helper method to get block classifier instance
+   */
+  getBlockClassifier() {
+    if (!this.blockClassifier) {
+      this.blockClassifier = new BlockClassifier();
+    }
+    return this.blockClassifier;
+  }
+
+  // =============================================================================
   // DOMAIN-AGNOSTIC VALIDATORS - Quality checks with repair triggers
   // =============================================================================
   
@@ -2284,14 +2698,20 @@ class PlanExecutor {
     });
   }
   
+  /**
+   * Generate selector-based citations with DOM paths - Phase 1.7
+   * Format: {selector, startOffset?, endOffset?, content_hash}
+   */
   generateCitations(mapping, html, contentBlocks) {
     const citations = {};
+    const $ = this.context.get('dom_structure')?.$ || cheerio.load(html);
+    const thresholds = this.getUnifiedThresholds();
     
     // Generate citations for each field
     for (const [field, value] of Object.entries(mapping)) {
       if (value && typeof value === 'string') {
-        const citation = this.findSourceInContent(value, html, contentBlocks);
-        if (citation) {
+        const citation = this.createSelectorBasedCitation(value, field, $, thresholds.citation_confidence);
+        if (citation && citation.confidence >= thresholds.citation_confidence) {
           citations[field] = citation;
         }
       }
@@ -2303,17 +2723,188 @@ class PlanExecutor {
     };
   }
   
+  /**
+   * Create selector-based citation for extracted field value
+   */
+  createSelectorBasedCitation(value, fieldName, $, minConfidence = 0.3) {
+    if (!value || value.length < 3) return null;
+    
+    // Clean value for matching
+    const cleanValue = value.trim().substring(0, 100);
+    const valueWords = cleanValue.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    
+    if (valueWords.length === 0) return null;
+    
+    let bestMatch = null;
+    let bestScore = 0;
+    
+    // Search through DOM elements
+    $('*').each((index, element) => {
+      const $el = $(element);
+      const elementText = $el.text().trim();
+      
+      if (elementText.length < 3) return;
+      
+      // Calculate match score
+      const score = this.calculateTextMatch(cleanValue, elementText, valueWords);
+      
+      if (score > bestScore && score >= minConfidence) {
+        bestScore = score;
+        
+        // Generate CSS selector path for this element
+        const selector = this.generateCSSSelector($el, $);
+        
+        // Find exact position within element text
+        const position = this.findTextPosition(cleanValue, elementText);
+        
+        bestMatch = {
+          selector: selector,
+          confidence: Math.min(0.95, score),
+          content_hash: this.hashContent(elementText),
+          field_name: fieldName,
+          extracted_value: cleanValue,
+          source_text_length: elementText.length,
+          startOffset: position.start,
+          endOffset: position.end,
+          element_tag: element.tagName?.toLowerCase() || 'unknown',
+          element_classes: $el.attr('class')?.split(/\s+/) || [],
+          parent_selector: this.generateCSSSelector($el.parent(), $, 1)
+        };
+      }
+    });
+    
+    return bestMatch;
+  }
+  
+  /**
+   * Calculate text matching score between extracted value and source element
+   */
+  calculateTextMatch(cleanValue, elementText, valueWords) {
+    const elementLower = elementText.toLowerCase();
+    
+    // Exact match gets highest score
+    if (elementText.includes(cleanValue)) {
+      return 0.95;
+    }
+    
+    // Partial word overlap
+    let matchedWords = 0;
+    valueWords.forEach(word => {
+      if (elementLower.includes(word)) {
+        matchedWords++;
+      }
+    });
+    
+    const wordMatchRatio = matchedWords / valueWords.length;
+    
+    // Length similarity bonus
+    const lengthRatio = Math.min(cleanValue.length, elementText.length) / 
+                       Math.max(cleanValue.length, elementText.length);
+    
+    return (wordMatchRatio * 0.8) + (lengthRatio * 0.2);
+  }
+  
+  /**
+   * Generate CSS selector path for element
+   */
+  generateCSSSelector($element, $, maxDepth = 3) {
+    if (!$element.length) return '';
+    
+    const path = [];
+    let current = $element;
+    let depth = 0;
+    
+    while (current.length && current[0].tagName && depth < maxDepth) {
+      let selector = current[0].tagName.toLowerCase();
+      
+      // Add ID if available
+      const id = current.attr('id');
+      if (id) {
+        selector += `#${id}`;
+        path.unshift(selector);
+        break; // ID is unique, stop here
+      }
+      
+      // Add classes if available
+      const classes = current.attr('class');
+      if (classes) {
+        const classList = classes.split(/\s+/).filter(c => c.length > 0);
+        if (classList.length > 0) {
+          selector += '.' + classList.slice(0, 2).join('.');
+        }
+      }
+      
+      // Add nth-child for specificity
+      const siblings = current.siblings(current[0].tagName.toLowerCase());
+      if (siblings.length > 0) {
+        const index = siblings.index(current[0]) + 1;
+        selector += `:nth-child(${index + 1})`;
+      }
+      
+      path.unshift(selector);
+      current = current.parent();
+      depth++;
+    }
+    
+    return path.join(' > ');
+  }
+  
+  /**
+   * Find start/end position of text within source element
+   */
+  findTextPosition(needle, haystack) {
+    const startPos = haystack.indexOf(needle);
+    if (startPos === -1) {
+      // Try word-by-word matching for fuzzy position
+      const needleWords = needle.split(/\s+/);
+      const firstWordPos = haystack.indexOf(needleWords[0]);
+      if (firstWordPos !== -1) {
+        return {
+          start: firstWordPos,
+          end: firstWordPos + needle.length,
+          fuzzy: true
+        };
+      }
+      return { start: 0, end: needle.length, fuzzy: true };
+    }
+    
+    return {
+      start: startPos,
+      end: startPos + needle.length,
+      fuzzy: false
+    };
+  }
+  
+  /**
+   * Create content hash for detecting selector drift
+   */
+  hashContent(content) {
+    // Simple hash for content fingerprinting
+    let hash = 0;
+    const str = content.substring(0, 200); // First 200 chars
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return hash.toString(16);
+  }
+  
+  /**
+   * Legacy method for fallback compatibility
+   */
   findSourceInContent(value, html, contentBlocks) {
-    // Find where this value appears in the source content
-    const cleanValue = value.substring(0, 50); // First 50 chars for matching
+    // Fallback to old system if selector-based fails
+    const cleanValue = value.substring(0, 50);
     
     for (let i = 0; i < contentBlocks.length; i++) {
       if (contentBlocks[i].includes(cleanValue)) {
         return {
           source: 'content_block',
           block_index: i,
-          confidence: 0.8,
-          evidence: cleanValue
+          confidence: 0.6,
+          evidence: cleanValue,
+          legacy: true
         };
       }
     }
@@ -4429,10 +5020,15 @@ async function processWithPlanBasedSystem(content, params) {
     console.log(`📊 Audit report: ${auditReport.session_summary.total_decisions} decisions, ${auditReport.filtering_audit.total_steps} filtering steps`);
     console.log(`🎓 Learning value: ${learningAnalysis.learning_value_score.toFixed(2)} (${learningAnalysis.queue_status.total_queued} cases queued)`);
     
-    return {
+    // Apply deduplication to the extracted data
+    const deduplicatedData = deduplicateExtractionResults(executionResult.data, plan);
+
+    // Create the result object
+    const result = {
       success: true,
-      data: executionResult.data,
+      data: deduplicatedData.items,
       metadata: {
+        ...deduplicatedData.metadata,
         strategy: plan.passes ? 'two_pass_extraction' : 'plan_based_extraction',
         plan_id: plan.task_id,
         skills_used: plan.passes 
@@ -4442,6 +5038,7 @@ async function processWithPlanBasedSystem(content, params) {
         budget_used: executionResult.budget_used,
         evaluation: evaluation,
         trace: executionResult.trace,
+        confidence: evaluation.overall_score, // For accuracy monitoring
         // Two-pass specific metadata
         ...(plan.passes && executionResult.passes && {
           pass_a_candidates: executionResult.pass_a_candidates,
@@ -4454,8 +5051,25 @@ async function processWithPlanBasedSystem(content, params) {
         audit_report: auditReport,
         // Active learning metadata
         learning_analysis: learningAnalysis
-      }
+      },
+      url: params.url,
+      jobId: 'plan_extraction_' + Date.now() // Add jobId for monitoring
     };
+
+    // Real-time accuracy monitoring (non-blocking)
+    try {
+      if (typeof ProductionAccuracyMonitor !== 'undefined') {
+        const monitor = new ProductionAccuracyMonitor();
+        // Monitor in background - don't wait for it
+        monitor.monitorExtraction(result).catch(err => {
+          console.warn('⚠️ Accuracy monitoring failed:', err.message);
+        });
+      }
+    } catch (monitorError) {
+      console.warn('⚠️ Could not initialize accuracy monitoring:', monitorError.message);
+    }
+
+    return result;
     
   } catch (error) {
     console.error('Plan-based extraction failed:', error);
@@ -4464,6 +5078,521 @@ async function processWithPlanBasedSystem(content, params) {
       error: error.message
     };
   }
+}
+
+/**
+ * Deduplication system for plan-based extraction results
+ * Removes duplicate entries that may come from different DOM selectors
+ */
+function deduplicateExtractionResults(data, plan) {
+  console.log('🔄 Starting deduplication process...');
+  
+  // Handle different data structures
+  if (!data || !Array.isArray(data)) {
+    console.log('📝 Data is not an array, skipping deduplication');
+    return {
+      items: data,
+      metadata: {
+        deduplication: {
+          enabled: false,
+          reason: 'data_not_array',
+          original_count: data ? 1 : 0,
+          final_count: data ? 1 : 0,
+          duplicates_removed: 0
+        }
+      }
+    };
+  }
+
+  const originalCount = data.length;
+  console.log(`📊 Processing ${originalCount} items for deduplication`);
+
+  if (originalCount <= 1) {
+    console.log('📝 Less than 2 items, skipping deduplication');
+    return {
+      items: data,
+      metadata: {
+        deduplication: {
+          enabled: false,
+          reason: 'insufficient_items',
+          original_count: originalCount,
+          final_count: originalCount,
+          duplicates_removed: 0
+        }
+      }
+    };
+  }
+
+  // Filter out aggregate blocks before deduplication
+  const filteredData = filterAggregateBlocks(data);
+  const aggregateBlocksRemoved = originalCount - filteredData.length;
+  
+  if (aggregateBlocksRemoved > 0) {
+    console.log(`🗑️ Filtered out ${aggregateBlocksRemoved} aggregate block(s)`);
+  }
+
+  // Group items by similarity
+  const duplicateGroups = findDuplicateGroups(filteredData);
+  
+  // Select best item from each group
+  const deduplicatedItems = [];
+  const removedDuplicates = [];
+  
+  for (const group of duplicateGroups) {
+    if (group.length === 1) {
+      // No duplicates found for this item
+      deduplicatedItems.push(group[0]);
+    } else {
+      // Multiple items found, select the best one
+      const bestItem = selectBestItem(group);
+      deduplicatedItems.push(bestItem);
+      
+      // Track removed duplicates for logging
+      const removed = group.filter(item => item !== bestItem);
+      removedDuplicates.push(...removed.map(item => ({
+        removed: item,
+        kept: bestItem,
+        similarity: calculateSimilarityScore(item, bestItem)
+      })));
+    }
+  }
+
+  const finalCount = deduplicatedItems.length;
+  const duplicatesRemoved = filteredData.length - finalCount;
+  const totalItemsRemoved = originalCount - finalCount;
+
+  console.log(`✅ Deduplication complete: ${originalCount} → ${finalCount} items (${aggregateBlocksRemoved} aggregate blocks + ${duplicatesRemoved} duplicates = ${totalItemsRemoved} total removed)`);
+  
+  if (duplicatesRemoved > 0) {
+    console.log('🔍 Removed duplicates:');
+    removedDuplicates.forEach((dup, index) => {
+      const keptName = extractDisplayName(dup.kept);
+      const removedName = extractDisplayName(dup.removed);
+      console.log(`   ${index + 1}. Kept "${keptName}" (confidence: ${dup.kept.confidence || 'N/A'}), removed "${removedName}" (similarity: ${(dup.similarity * 100).toFixed(1)}%)`);
+    });
+  }
+
+  return {
+    items: deduplicatedItems,
+    metadata: {
+      deduplication: {
+        enabled: true,
+        original_count: originalCount,
+        final_count: finalCount,
+        aggregate_blocks_removed: aggregateBlocksRemoved,
+        duplicates_removed: duplicatesRemoved,
+        total_items_removed: totalItemsRemoved,
+        duplicate_groups: duplicateGroups.length,
+        removed_duplicates: removedDuplicates.map(dup => ({
+          kept_item: extractDisplayName(dup.kept),
+          removed_item: extractDisplayName(dup.removed),
+          similarity_score: dup.similarity
+        }))
+      }
+    }
+  };
+}
+
+/**
+ * Filter out aggregate blocks that contain multiple people in one entry
+ * These are generic section headers like "Staff", "Team", etc. with combined content
+ */
+function filterAggregateBlocks(items) {
+  console.log('🔍 Filtering aggregate blocks...');
+  
+  return items.filter(item => {
+    if (!isAggregateBlock(item)) {
+      return true; // Keep non-aggregate items
+    }
+    
+    const displayName = extractDisplayName(item);
+    console.log(`🗑️ Filtering out aggregate block: "${displayName}"`);
+    return false; // Remove aggregate blocks
+  });
+}
+
+/**
+ * Determine if an item is an aggregate block containing multiple people
+ */
+function isAggregateBlock(item) {
+  if (!item || typeof item !== 'object') {
+    return false;
+  }
+  
+  const displayName = extractDisplayName(item).toLowerCase().trim();
+  const textContent = getAllTextContent(item); // Keep original case for pattern matching
+  
+  // Check for generic section headers
+  const genericHeaders = [
+    'staff', 'team', 'people', 'about', 'members', 'personnel', 
+    'employees', 'our team', 'meet the team', 'our staff', 
+    'leadership', 'faculty', 'directory', 'contacts',
+    'board', 'management', 'executives', 'administration'
+  ];
+  
+  const isGenericHeader = genericHeaders.some(header => 
+    displayName === header || displayName.includes(header)
+  );
+  
+  if (!isGenericHeader) {
+    return false; // Not a generic header, likely an individual person
+  }
+  
+  // If it's a generic header, check if content contains multiple people
+  return containsMultiplePeople(textContent); // Pass original case text
+}
+
+/**
+ * Detect if text content contains multiple people by looking for patterns
+ */
+function containsMultiplePeople(text) {
+  if (!text || text.length < 50) {
+    return false; // Too short to contain multiple people
+  }
+  
+  // Count potential person indicators
+  let personIndicators = 0;
+  
+  // Work with lowercase for title matching but original case for name patterns
+  const lowerText = text.toLowerCase();
+  
+  // Pattern 1: Multiple title patterns (Director, Manager, Assistant, etc.)
+  const titlePattern = /(director|manager|assistant|coordinator|supervisor|specialist|analyst|officer|executive|president|vice|chief|head|lead|senior)/gi;
+  const titleMatches = lowerText.match(titlePattern) || [];
+  if (titleMatches.length >= 2) {
+    personIndicators += Math.floor(titleMatches.length / 2);
+  }
+  
+  // Pattern 2: Multiple email patterns
+  const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+  const emailMatches = lowerText.match(emailPattern) || [];
+  if (emailMatches.length >= 2) {
+    personIndicators += emailMatches.length;
+  }
+  
+  // Pattern 3: Multiple phone patterns
+  const phonePattern = /(\(\d{3}\)\s*\d{3}-\d{4}|\d{3}-\d{3}-\d{4}|\d{3}\.\d{3}\.\d{4})/g;
+  const phoneMatches = text.match(phonePattern) || [];
+  if (phoneMatches.length >= 2) {
+    personIndicators += phoneMatches.length;
+  }
+  
+  // Pattern 4: Multiple capitalized name patterns (likely names)
+  const namePattern = /\b[A-Z][a-z]+\s+[A-Z][a-z]+/g;
+  const nameMatches = text.match(namePattern) || [];
+  if (nameMatches.length >= 2) { // Need at least 2 to be confident it's multiple people
+    personIndicators += nameMatches.length;
+  }
+  
+  // Pattern 5: Look for repeated structural patterns that suggest multiple entries
+  const structurePattern = /([A-Z][a-z]+\s+[A-Z][a-z]+)[\s\S]*?(director|manager|assistant|coordinator)/gi;
+  const structureMatches = text.match(structurePattern) || [];
+  if (structureMatches.length >= 2) {
+    personIndicators += structureMatches.length;
+  }
+  
+  // Pattern 6: Parenthetical role indicators (John Smith (CEO), Jane Doe (CTO))
+  const parentheticalRolePattern = /[A-Z][a-z]+\s+[A-Z][a-z]+\s*\([^)]+\)/g;
+  const parentheticalMatches = text.match(parentheticalRolePattern) || [];
+  if (parentheticalMatches.length >= 2) {
+    personIndicators += parentheticalMatches.length * 2; // Higher weight for this pattern
+  }
+  
+  // If we found multiple indicators, it's likely an aggregate block
+  const isAggregate = personIndicators >= 3;
+  
+  if (isAggregate) {
+    console.log(`🔍 Detected aggregate block with ${personIndicators} person indicators`);
+  }
+  
+  return isAggregate;
+}
+
+/**
+ * Find groups of duplicate items using multiple similarity strategies
+ */
+function findDuplicateGroups(items) {
+  const groups = [];
+  const processed = new Set();
+
+  for (let i = 0; i < items.length; i++) {
+    if (processed.has(i)) continue;
+
+    const currentGroup = [items[i]];
+    processed.add(i);
+
+    // Find all items similar to this one
+    for (let j = i + 1; j < items.length; j++) {
+      if (processed.has(j)) continue;
+
+      if (areItemsSimilar(items[i], items[j])) {
+        currentGroup.push(items[j]);
+        processed.add(j);
+      }
+    }
+
+    groups.push(currentGroup);
+  }
+
+  return groups;
+}
+
+/**
+ * Determine if two items are similar enough to be considered duplicates
+ */
+function areItemsSimilar(item1, item2) {
+  // First check for exact name matches - these are definitely duplicates
+  const name1 = extractDisplayName(item1).toLowerCase().trim();
+  const name2 = extractDisplayName(item2).toLowerCase().trim();
+  
+  if (name1 && name2 && name1 === name2) {
+    return true; // Exact name match = duplicate
+  }
+  
+  // Check for name abbreviations (e.g., "N. Smith" vs "Nancy Smith")
+  if (name1 && name2) {
+    const parts1 = name1.split(/\s+/);
+    const parts2 = name2.split(/\s+/);
+    
+    // If one is abbreviated (has dots) and matches pattern
+    if (parts1.length === parts2.length) {
+      let matches = 0;
+      for (let i = 0; i < parts1.length; i++) {
+        const part1 = parts1[i].replace('.', '');
+        const part2 = parts2[i].replace('.', '');
+        
+        // Exact match or first letter match for abbreviations
+        if (part1 === part2 || (part1.length === 1 && part2.startsWith(part1)) || (part2.length === 1 && part1.startsWith(part2))) {
+          matches++;
+        }
+      }
+      if (matches === parts1.length) {
+        return true; // All parts match (accounting for abbreviations)
+      }
+    }
+  }
+  
+  // Fall back to similarity score with lower threshold for edge cases
+  const similarity = calculateSimilarityScore(item1, item2);
+  const threshold = 0.75; // Lowered threshold for better detection
+  
+  return similarity >= threshold;
+}
+
+/**
+ * Calculate similarity score between two items using multiple strategies
+ */
+function calculateSimilarityScore(item1, item2) {
+  const scores = [];
+
+  // Strategy 1: Name/heading similarity (most important)
+  const nameScore = calculateNameSimilarity(item1, item2);
+  scores.push({ score: nameScore, weight: 0.6 });
+
+  // Strategy 2: Content overlap
+  const contentScore = calculateContentSimilarity(item1, item2);
+  scores.push({ score: contentScore, weight: 0.3 });
+
+  // Strategy 3: Metadata similarity  
+  const metadataScore = calculateMetadataSimilarity(item1, item2);
+  scores.push({ score: metadataScore, weight: 0.1 });
+
+  // Calculate weighted average
+  const totalWeight = scores.reduce((sum, s) => sum + s.weight, 0);
+  const weightedScore = scores.reduce((sum, s) => sum + (s.score * s.weight), 0) / totalWeight;
+
+  return weightedScore;
+}
+
+/**
+ * Calculate name/heading similarity using fuzzy string matching
+ */
+function calculateNameSimilarity(item1, item2) {
+  const name1 = extractDisplayName(item1).toLowerCase().trim();
+  const name2 = extractDisplayName(item2).toLowerCase().trim();
+
+  if (!name1 || !name2) return 0;
+
+  // Exact match
+  if (name1 === name2) return 1.0;
+
+  // Levenshtein distance similarity
+  const distance = levenshteinDistance(name1, name2);
+  const maxLength = Math.max(name1.length, name2.length);
+  const similarity = 1 - (distance / maxLength);
+
+  // Boost similarity if one name contains the other
+  if (name1.includes(name2) || name2.includes(name1)) {
+    return Math.max(similarity, 0.8);
+  }
+
+  return similarity;
+}
+
+/**
+ * Calculate content overlap between items
+ */
+function calculateContentSimilarity(item1, item2) {
+  // Get all text content from both items
+  const content1 = getAllTextContent(item1).toLowerCase();
+  const content2 = getAllTextContent(item2).toLowerCase();
+
+  if (!content1 || !content2) return 0;
+
+  // Simple word overlap calculation
+  const words1 = new Set(content1.split(/\s+/));
+  const words2 = new Set(content2.split(/\s+/));
+  
+  const intersection = new Set([...words1].filter(x => words2.has(x)));
+  const union = new Set([...words1, ...words2]);
+  
+  return intersection.size / union.size;
+}
+
+/**
+ * Calculate metadata similarity (position, confidence, etc.)
+ */
+function calculateMetadataSimilarity(item1, item2) {
+  let score = 0;
+  let factors = 0;
+
+  // Compare confidence scores if available
+  if (item1.confidence && item2.confidence) {
+    const confidenceDiff = Math.abs(item1.confidence - item2.confidence);
+    score += 1 - confidenceDiff;
+    factors++;
+  }
+
+  // Compare any position/index information
+  if (item1.index !== undefined && item2.index !== undefined) {
+    const indexDiff = Math.abs(item1.index - item2.index);
+    score += indexDiff <= 2 ? 0.8 : 0.2; // Close indices suggest similar items
+    factors++;
+  }
+
+  return factors > 0 ? score / factors : 0.5;
+}
+
+/**
+ * Select the best item from a group of duplicates
+ */
+function selectBestItem(group) {
+  if (group.length === 1) return group[0];
+
+  // Scoring factors for item selection
+  return group.reduce((best, current) => {
+    const bestScore = calculateItemQuality(best);
+    const currentScore = calculateItemQuality(current);
+    
+    return currentScore > bestScore ? current : best;
+  });
+}
+
+/**
+ * Calculate quality score for an item to determine which to keep
+ */
+function calculateItemQuality(item) {
+  let score = 0;
+
+  // Factor 1: Confidence score (if available)
+  if (item.confidence) {
+    score += item.confidence * 40; // 0-40 points
+  }
+
+  // Factor 2: Amount of content (more complete data is better)
+  const textContent = getAllTextContent(item);
+  const contentLength = textContent.length;
+  score += Math.min(contentLength / 50, 20); // 0-20 points for content length
+
+  // Factor 3: Number of non-empty fields
+  const nonEmptyFields = Object.values(item).filter(value => 
+    value !== null && value !== undefined && value !== ''
+  ).length;
+  score += nonEmptyFields * 2; // 2 points per field
+
+  // Factor 4: Presence of key identifying fields
+  const name = extractDisplayName(item);
+  if (name && name.length > 2) {
+    score += 15; // 15 points for having a meaningful name
+  }
+
+  return score;
+}
+
+/**
+ * Extract the main display name/heading from an item
+ */
+function extractDisplayName(item) {
+  if (!item || typeof item !== 'object') return '';
+
+  // Common name fields in order of preference
+  const nameFields = ['name', 'title', 'heading', 'label', 'displayName', 'fullName', 'person', 'member'];
+  
+  for (const field of nameFields) {
+    if (item[field] && typeof item[field] === 'string' && item[field].trim()) {
+      return item[field].trim();
+    }
+  }
+
+  // Fallback: try to find any string field that looks like a name
+  for (const [key, value] of Object.entries(item)) {
+    if (typeof value === 'string' && value.trim() && value.length > 2) {
+      // Skip obvious non-name fields
+      if (!['id', 'url', 'link', 'image', 'description', 'content'].includes(key.toLowerCase())) {
+        return value.trim();
+      }
+    }
+  }
+
+  return '';
+}
+
+/**
+ * Get all text content from an item for comparison
+ */
+function getAllTextContent(item) {
+  if (!item || typeof item !== 'object') return '';
+
+  const textParts = [];
+  
+  for (const [key, value] of Object.entries(item)) {
+    if (typeof value === 'string' && value.trim()) {
+      textParts.push(value.trim());
+    }
+  }
+
+  return textParts.join(' ');
+}
+
+/**
+ * Calculate Levenshtein distance between two strings
+ */
+function levenshteinDistance(str1, str2) {
+  const matrix = [];
+
+  for (let i = 0; i <= str2.length; i++) {
+    matrix[i] = [i];
+  }
+
+  for (let j = 0; j <= str1.length; j++) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= str2.length; i++) {
+    for (let j = 1; j <= str1.length; j++) {
+      if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+
+  return matrix[str2.length][str1.length];
 }
 
 /**
@@ -4719,9 +5848,12 @@ function extractStructuredObject(content, schema, instructions) {
 }
 
 /**
- * Core skill: ValidateOutput - Ensure output matches expected schema
+ * @deprecated - DEPRECATED: Old validateOutputSkill replaced by skillValidateOutput in PlanExecutor
+ * This function is no longer used in the plan-based system
  */
 function validateOutputSkill(data, schema) {
+  console.warn('⚠️ DEPRECATED: validateOutputSkill is deprecated. Use skillValidateOutput in PlanExecutor instead.');
+  
   if (!schema) return { success: true, data, issues: [] };
   
   const issues = [];
@@ -4749,32 +5881,14 @@ function validateOutputSkill(data, schema) {
 }
 
 /**
- * Simple skill-based processor for structured extraction
+ * @deprecated - DEPRECATED: Old skill-based processor replaced by plan-based system
+ * Use processWithPlanBasedSystem instead - this provides better DOM-first extraction
  */
 async function processWithSkills(content, params) {
-  console.log('Processing with skills - Instructions:', params.extractionInstructions);
-  console.log('Schema type:', params.outputSchema?.type);
+  console.warn('⚠️ DEPRECATED: processWithSkills is deprecated. Use processWithPlanBasedSystem instead.');
   
-  // Step 1: Map fields according to schema
-  const mapResult = mapFieldsSkill(content, params.outputSchema, params.extractionInstructions);
-  
-  if (!mapResult.success) {
-    throw new Error(`Field mapping failed: ${mapResult.error}`);
-  }
-  
-  // Step 2: Validate output
-  const validateResult = validateOutputSkill(mapResult.data, params.outputSchema);
-  
-  return {
-    success: true,
-    data: validateResult.data,
-    metadata: {
-      strategy: 'skill_based_extraction',
-      skills_used: ['MapFields', 'ValidateOutput'],
-      issues: validateResult.issues || [],
-      confidence: validateResult.issues?.length === 0 ? 0.9 : 0.7
-    }
-  };
+  // Redirect to new plan-based system
+  return await processWithPlanBasedSystem(content, params);
 }
 
 // Update job status in DynamoDB
@@ -5258,11 +6372,16 @@ async function performExtraction(jobId, params) {
           };
           
           // Update metadata to reflect plan-based extraction
+          // Initialize metadata object if it doesn't exist
+          if (!result.data.metadata) {
+            result.data.metadata = {};
+          }
+          
           result.data.metadata.strategy = 'plan_based_extraction';
-          result.data.metadata.skills_used = skillResult.metadata.skills_used;
-          result.data.metadata.plan_id = skillResult.metadata.plan_id;
-          result.data.metadata.evaluation = skillResult.metadata.evaluation;
-          result.data.metadata.confidence = skillResult.metadata.evaluation?.overall_score || 0.5;
+          result.data.metadata.skills_used = skillResult.metadata?.skills_used || [];
+          result.data.metadata.plan_id = skillResult.metadata?.plan_id || 'unknown';
+          result.data.metadata.evaluation = skillResult.metadata?.evaluation || null;
+          result.data.metadata.confidence = skillResult.metadata?.evaluation?.overall_score || 0.5;
           
           // Don't add raw content formats when structured data is returned
           console.log(`✅ Plan-based extraction successful - returned ${Array.isArray(skillResult.data) ? skillResult.data.length : 'structured'} items`);
@@ -5660,7 +6779,29 @@ async function testPlanBasedSystem() {
     console.log('Evaluation score:', result.metadata?.evaluation?.overall_score);
     
     if (result.success && result.data) {
-      console.log('Sample extracted data:', JSON.stringify(result.data.slice ? result.data.slice(0, 2) : result.data, null, 2));
+      // Create JSON-safe version by removing circular references and DOM elements
+      const cleanData = (data) => {
+        if (Array.isArray(data)) {
+          return data.slice(0, 2).map(item => cleanData(item));
+        } else if (data && typeof data === 'object') {
+          const clean = {};
+          for (const [key, value] of Object.entries(data)) {
+            // Skip DOM elements and circular references
+            if (key === 'element' || key === 'dom_structure' || typeof value === 'function') {
+              continue;
+            }
+            if (value && typeof value === 'object' && (value.constructor.name === 'Element' || value.cheerio)) {
+              continue;
+            }
+            clean[key] = cleanData(value);
+          }
+          return clean;
+        }
+        return data;
+      };
+      
+      const sampleData = cleanData(result.data);
+      console.log('Sample extracted data:', JSON.stringify(sampleData, null, 2));
     }
     
     if (result.metadata?.evaluation?.issues?.length > 0) {

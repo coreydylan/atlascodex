@@ -1,0 +1,15 @@
+{
+  "url": "https://httpstat.us/404",
+  "formats": ["structured"],
+  "extractionInstructions": "Extract any people information if available",
+  "outputSchema": {
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "title": {"type": "string"}
+      }
+    }
+  }
+}

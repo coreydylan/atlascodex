@@ -12,7 +12,13 @@
     "deploy": "serverless deploy",
     "bootstrap": "npm install && cd packages/frontend && npm install && cd ../core && npm install && cd ../..",
     "typecheck": "echo 'Type checking completed'",
-    "lint": "echo 'Linting completed'"
+    "lint": "echo 'Linting completed'",
+    "test:accuracy": "node scripts/run-accuracy-tests.js full",
+    "test:accuracy:critical": "node scripts/run-accuracy-tests.js critical",
+    "test:accuracy:regression": "node scripts/run-accuracy-tests.js regression",
+    "test:accuracy:validate": "node scripts/run-accuracy-tests.js validate",
+    "validate:production-ready": "npm run test:accuracy:critical && npm run test:accuracy:regression",
+    "benchmark:accuracy": "npm run test:accuracy && echo 'Accuracy benchmarks complete'"
   },
   "dependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.879.0",

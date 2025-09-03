@@ -1,0 +1,17 @@
+{
+  "url": "https://vmota.org/people/",
+  "formats": ["structured"],
+  "extractionInstructions": "Extract staff member information including name, title, and bio from the VMOTA staff page",
+  "outputSchema": {
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "title": {"type": "string"},
+        "bio": {"type": "string"}
+      },
+      "required": ["name"]
+    }
+  }
+}

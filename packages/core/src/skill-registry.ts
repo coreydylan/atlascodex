@@ -443,62 +443,267 @@ skills.set('MapFields', {
   failureModes: ['missing required fields', 'type mismatches'],
   repair: 'Use defaults or null for missing fields',
   implementation: async (input) => {
-    const mapped: any = {};
-    const fieldConfidence: any = {};
     const schema = input.targetSchema;
     
-    // Map each schema field
-    for (const [field, fieldSchema] of Object.entries(schema.properties || {})) {
-      // Try multiple source locations
-      const candidates = [
-        input.source[field],
-        input.source[field.toLowerCase()],
-        input.source['og:' + field],
-        input.source['twitter:' + field]
-      ];
-      
-      let value = null;
-      let confidence = 0;
-      
-      for (const candidate of candidates) {
-        if (candidate !== undefined && candidate !== null) {
-          value = candidate;
-          confidence = 0.9;
-          break;
-        }
-      }
-      
-      // Special field mappings
-      if (!value) {
-        if (field === 'summary' && input.source.description) {
-          value = input.source.description;
-          confidence = 0.7;
-        } else if (field === 'author' && input.source.creator) {
-          value = input.source.creator;
-          confidence = 0.7;
-        } else if (field === 'datePublished' && input.source.date) {
-          value = input.source.date;
-          confidence = 0.6;
-        }
-      }
-      
-      if (value !== null) {
-        mapped[field] = value;
-        fieldConfidence[field] = confidence;
-      } else if (schema.required?.includes(field)) {
-        mapped[field] = '';
-        fieldConfidence[field] = 0;
-      }
+    // Handle array schemas (e.g., people, products, articles)
+    if (schema.type === 'array' && schema.items?.properties) {
+      return mapArrayData(input.source, schema, input.semantic_blocks);
     }
     
+    // Handle single object schemas
+    if (schema.type === 'object' && schema.properties) {
+      return mapObjectData(input.source, schema);
+    }
+    
+    // Fallback for unknown schema types
     return {
-      mapped,
-      fieldConfidence,
-      confidence: Object.values(fieldConfidence).reduce((a: number, b: number) => a + b, 0) / 
-                  Object.keys(fieldConfidence).length
+      mapped: input.source,
+      fieldConfidence: {},
+      confidence: 0.5
     };
   }
 });
+
+// Helper function for mapping array data (people, products, etc.)
+function mapArrayData(source: any, schema: any, semanticBlocks: any[] = []) {
+  const itemSchema = schema.items;
+  const mappedItems: any[] = [];
+  const itemConfidences: any[] = [];
+  
+  // Try to extract multiple items from semantic blocks first
+  if (semanticBlocks && semanticBlocks.length > 0) {
+    const relevantBlocks = semanticBlocks.filter(block => 
+      block.classification?.includes('profile') || 
+      block.classification?.includes('person') ||
+      block.classification?.includes('staff') ||
+      block.textContent?.toLowerCase().includes('director') ||
+      block.textContent?.toLowerCase().includes('manager')
+    );
+    
+    console.log(`🔍 Found ${relevantBlocks.length} relevant semantic blocks for array mapping`);
+    
+    for (const block of relevantBlocks) {
+      const itemResult = mapObjectData(block, itemSchema);
+      if (itemResult.mapped && Object.keys(itemResult.mapped).length > 0) {
+        // Only include if we have meaningful data
+        const hasValidData = Object.values(itemResult.mapped).some(value => 
+          value && String(value).trim().length > 0
+        );
+        
+        if (hasValidData) {
+          mappedItems.push(itemResult.mapped);
+          itemConfidences.push(itemResult.fieldConfidence);
+        }
+      }
+    }
+  }
+  
+  // If no semantic blocks or insufficient data, try to extract from source directly
+  if (mappedItems.length === 0 && source) {
+    // Look for array-like data in source
+    const potentialArrays = Object.values(source).filter(value => Array.isArray(value));
+    
+    if (potentialArrays.length > 0) {
+      const sourceArray = potentialArrays[0] as any[];
+      for (const item of sourceArray.slice(0, 10)) { // Limit to 10 items
+        const itemResult = mapObjectData(item, itemSchema);
+        if (itemResult.mapped) {
+          mappedItems.push(itemResult.mapped);
+          itemConfidences.push(itemResult.fieldConfidence);
+        }
+      }
+    } else {
+      // Try to extract a single item from source
+      const itemResult = mapObjectData(source, itemSchema);
+      if (itemResult.mapped) {
+        mappedItems.push(itemResult.mapped);
+        itemConfidences.push(itemResult.fieldConfidence);
+      }
+    }
+  }
+  
+  // Calculate overall confidence
+  const avgConfidence = itemConfidences.length > 0 
+    ? itemConfidences.reduce((sum, conf) => sum + (conf.confidence || 0), 0) / itemConfidences.length
+    : 0.5;
+  
+  console.log(`✅ Mapped ${mappedItems.length} items with average confidence ${avgConfidence.toFixed(2)}`);
+  
+  return {
+    mapped: mappedItems,
+    fieldConfidence: { items: itemConfidences },
+    confidence: avgConfidence
+  };
+}
+
+// Helper function for mapping single object data
+function mapObjectData(source: any, schema: any) {
+  const mapped: any = {};
+  const fieldConfidence: any = {};
+  
+  // Handle case where source might be a text block with structured content
+  if (typeof source === 'string' || (source?.textContent && typeof source.textContent === 'string')) {
+    const textContent = typeof source === 'string' ? source : source.textContent;
+    return extractFromText(textContent, schema);
+  }
+  
+  // Handle object source
+  if (!source || typeof source !== 'object') {
+    // Return empty object with default values for required fields
+    for (const [field, fieldSchema] of Object.entries(schema.properties || {})) {
+      if (schema.required?.includes(field)) {
+        mapped[field] = getDefaultValue(field, fieldSchema);
+        fieldConfidence[field] = 0;
+      }
+    }
+    return { mapped, fieldConfidence, confidence: 0 };
+  }
+  
+  // Map each schema field
+  for (const [field, fieldSchema] of Object.entries(schema.properties || {})) {
+    // Try multiple source locations
+    const candidates = [
+      source[field],
+      source[field.toLowerCase()],
+      source[field.charAt(0).toUpperCase() + field.slice(1)], // Capitalize first letter
+      source['og:' + field],
+      source['twitter:' + field],
+      source.attributes?.[field],
+      source.data?.[field]
+    ];
+    
+    let value = null;
+    let confidence = 0;
+    
+    for (const candidate of candidates) {
+      if (candidate !== undefined && candidate !== null && String(candidate).trim().length > 0) {
+        value = String(candidate).trim();
+        confidence = 0.9;
+        break;
+      }
+    }
+    
+    // Special field mappings with higher specificity
+    if (!value) {
+      if (field === 'name' && (source.fullName || source.personName || source.staffName)) {
+        value = source.fullName || source.personName || source.staffName;
+        confidence = 0.8;
+      } else if (field === 'title' || field === 'role') {
+        const titleCandidates = [source.jobTitle, source.position, source.role, source.title];
+        value = titleCandidates.find(candidate => candidate && String(candidate).trim().length > 0);
+        confidence = value ? 0.8 : 0;
+      } else if (field === 'bio' || field === 'description') {
+        const bioCandidates = [source.biography, source.bio, source.description, source.summary];
+        value = bioCandidates.find(candidate => candidate && String(candidate).trim().length > 0);
+        confidence = value ? 0.7 : 0;
+      } else if (field === 'department') {
+        value = source.department || source.division || source.team;
+        confidence = value ? 0.7 : 0;
+      }
+    }
+    
+    if (value !== null && String(value).trim().length > 0) {
+      mapped[field] = String(value).trim();
+      fieldConfidence[field] = confidence;
+    } else if (schema.required?.includes(field)) {
+      mapped[field] = getDefaultValue(field, fieldSchema);
+      fieldConfidence[field] = 0;
+    }
+  }
+  
+  const avgConfidence = Object.keys(fieldConfidence).length > 0
+    ? Object.values(fieldConfidence).reduce((a: number, b: number) => a + b, 0) / Object.keys(fieldConfidence).length
+    : 0;
+  
+  return {
+    mapped,
+    fieldConfidence,
+    confidence: avgConfidence
+  };
+}
+
+// Helper function to extract structured data from text content
+function extractFromText(textContent: string, schema: any) {
+  const mapped: any = {};
+  const fieldConfidence: any = {};
+  
+  // Split text into potential sections
+  const lines = textContent.split('\n').filter(line => line.trim().length > 0);
+  
+  for (const [field, fieldSchema] of Object.entries(schema.properties || {})) {
+    let value = null;
+    let confidence = 0;
+    
+    if (field === 'name') {
+      // Look for name patterns at the beginning of text or after common prefixes
+      const namePattern = /^([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/;
+      const nameMatch = textContent.match(namePattern);
+      if (nameMatch) {
+        value = nameMatch[1];
+        confidence = 0.8;
+      }
+    } else if (field === 'title' || field === 'role') {
+      // Look for titles after names or standalone
+      const titlePatterns = [
+        /(?:Director|Manager|Executive|Assistant|Specialist|Coordinator|President|CEO|CTO|VP|Vice President)/i
+      ];
+      for (const pattern of titlePatterns) {
+        const match = textContent.match(pattern);
+        if (match) {
+          value = match[0];
+          confidence = 0.7;
+          break;
+        }
+      }
+    } else if (field === 'bio' || field === 'description') {
+      // Take longer text sections as bio
+      const longLines = lines.filter(line => line.length > 50);
+      if (longLines.length > 0) {
+        value = longLines[0];
+        confidence = 0.6;
+      }
+    }
+    
+    if (value) {
+      mapped[field] = value;
+      fieldConfidence[field] = confidence;
+    } else if (schema.required?.includes(field)) {
+      mapped[field] = getDefaultValue(field, fieldSchema);
+      fieldConfidence[field] = 0;
+    }
+  }
+  
+  const avgConfidence = Object.keys(fieldConfidence).length > 0
+    ? Object.values(fieldConfidence).reduce((a: number, b: number) => a + b, 0) / Object.keys(fieldConfidence).length
+    : 0;
+  
+  return {
+    mapped,
+    fieldConfidence,
+    confidence: avgConfidence
+  };
+}
+
+// Helper function to get default values for fields
+function getDefaultValue(field: string, fieldSchema: any): any {
+  if (fieldSchema?.default !== undefined) return fieldSchema.default;
+  
+  switch (fieldSchema?.type) {
+    case 'string':
+      return '';
+    case 'number':
+    case 'integer':
+      return 0;
+    case 'boolean':
+      return false;
+    case 'array':
+      return [];
+    case 'object':
+      return {};
+    default:
+      return null;
+  }
+}
 
 // 8. RankItems - Deterministic top-N selection
 skills.set('RankItems', {

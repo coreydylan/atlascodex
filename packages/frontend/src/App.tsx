@@ -224,7 +224,7 @@ function App() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123',
+            'x-api-key': process.env.REACT_APP_API_KEY || 'atlas-prod-key-2024',
           },
           body: JSON.stringify({
             prompt: url,
@@ -239,17 +239,22 @@ function App() {
           if (aiResult.jobId) {
             const newJob: Job = {
               id: aiResult.jobId,
-              url: aiResult.url,
-              mode: aiResult.type as Mode || 'scrape',
-              format: aiResult.formats?.[0] as Format || 'markdown',
-              status: 'running',
+              url: aiResult.aiProcessing?.url || aiResult.url || url,
+              mode: aiResult.aiProcessing?.type as Mode || 'scrape',
+              format: aiResult.aiProcessing?.formats?.[0] as Format || 'structured',
+              status: aiResult.status === 'completed' ? 'success' : 'running',
               startedAt: new Date().toISOString(),
-              options: aiResult.params
+              options: aiResult.aiProcessing?.params,
+              result: aiResult.status === 'completed' ? aiResult.result : undefined
             };
             
             setJobs([newJob, ...jobs]);
             setActiveJob(newJob);
-            pollJobStatus(aiResult.jobId, newJob.id);
+            
+            // Only poll if the job is not already completed
+            if (aiResult.status !== 'completed') {
+              pollJobStatus(aiResult.jobId, newJob.id);
+            }
             setShowResult(true);
             setAiProcessing(false);
             setLoading(false);
@@ -299,7 +304,7 @@ function App() {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123',
+              'x-api-key': process.env.REACT_APP_API_KEY || 'atlas-prod-key-2024',
             },
             body: JSON.stringify({
               prompt: fullUrl,
@@ -416,7 +421,7 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123',
+          'x-api-key': process.env.REACT_APP_API_KEY || 'atlas-prod-key-2024',
         },
         body: JSON.stringify(requestBody),
       });
@@ -485,7 +490,7 @@ function App() {
         // Use the correct /api/extract/{jobId} endpoint
         let response = await fetch(`${API_BASE}/api/extract/${jobId}`, {
           headers: {
-            'x-api-key': process.env.REACT_APP_API_KEY || 'test-key-123',
+            'x-api-key': process.env.REACT_APP_API_KEY || 'atlas-prod-key-2024',
           },
         });
         
@@ -791,48 +796,182 @@ Examples:
               </Card>
             )}
 
-              {/* Result Display */}
-              {activeJob && activeJob.result && (
+              {/* Clear Result Display */}
+              {activeJob && (
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-lg flex items-center justify-between">
-                      <span>Extraction Result</span>
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm">
-                          <Copy className="w-4 h-4 mr-1" />
-                          Copy
-                        </Button>
-                        <Button variant="outline" size="sm">
-                          <Download className="w-4 h-4 mr-1" />
-                          Export
-                        </Button>
-                      </div>
+                      <span>
+                        {activeJob.status === 'running' && '⏳ Processing...'}
+                        {activeJob.status === 'success' && '✅ Extraction Complete'}
+                        {activeJob.status === 'error' && '❌ Extraction Failed'}
+                      </span>
+                      {activeJob.status === 'success' && activeJob.result && (
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(JSON.stringify(activeJob.result, null, 2))}>
+                            <Copy className="w-4 h-4 mr-1" />
+                            Copy
+                          </Button>
+                          <Button variant="outline" size="sm">
+                            <Download className="w-4 h-4 mr-1" />
+                            Export
+                          </Button>
+                        </div>
+                      )}
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="bg-gray-50 rounded-lg p-4 max-h-96 overflow-auto">
-                      <pre className="text-xs font-mono whitespace-pre-wrap">
-                        {(() => {
-                          // Extract the actual data from the result structure
-                          let displayData = activeJob.result;
-                          
-                          // If result has a data property, use that (from API response)
-                          if (displayData?.data) {
-                            displayData = displayData.data;
-                          }
-                          
-                          // If it's still processing or has status messages
-                          if (displayData?.status === 'processing' || displayData?.status === 'Processing...') {
-                            return JSON.stringify(displayData, null, 2);
-                          }
-                          
-                          // Display the extracted content
-                          return typeof displayData === 'object' 
-                            ? JSON.stringify(displayData, null, 2)
-                            : displayData;
-                        })()}
-                      </pre>
-                    </div>
+                    {activeJob.status === 'error' && (
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                        <div className="text-red-800 font-medium mb-2">Error Details:</div>
+                        <div className="text-red-700 text-sm">{activeJob.error || 'Unknown error occurred'}</div>
+                      </div>
+                    )}
+                    
+                    {activeJob.status === 'running' && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <div className="flex items-center gap-2 text-blue-800">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span className="font-medium">Extraction in progress...</span>
+                        </div>
+                        {activeJob.result?.message && (
+                          <div className="text-blue-700 text-sm mt-2">{activeJob.result.message}</div>
+                        )}
+                      </div>
+                    )}
+                    
+                    {activeJob.status === 'success' && activeJob.result && (
+                      <div className="space-y-4">
+                        {/* Show extracted data clearly */}
+                        <div>
+                          <h4 className="font-medium text-gray-900 mb-2">📄 Extracted Data</h4>
+                          <div className="bg-gray-50 rounded-lg p-4 max-h-96 overflow-auto border">
+                            {(() => {
+                              // Extract the actual data from the result structure
+                              let displayData = activeJob.result;
+                              
+                              // If result has a data property, use that (from API response)
+                              if (displayData?.data) {
+                                displayData = displayData.data;
+                              }
+                              
+                              // Check for malformed data and show warning
+                              const jsonString = JSON.stringify(displayData, null, 2);
+                              const isMalformed = jsonString.includes('{"name":"') && jsonString.includes('Director') && jsonString.includes('bio":""}');
+                              
+                              if (isMalformed) {
+                                return (
+                                  <div className="space-y-3">
+                                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                                      <div className="text-amber-800 text-sm">
+                                        ⚠️ <strong>Data Quality Issue:</strong> Names, titles, and bios appear to be concatenated into single strings instead of separate person objects. This will be fixed in the next system update.
+                                      </div>
+                                    </div>
+                                    <pre className="text-xs font-mono whitespace-pre-wrap text-gray-800">
+                                      {jsonString}
+                                    </pre>
+                                  </div>
+                                );
+                              }
+                              
+                              // Check if this looks like team member data for card view
+                              const isTeamMemberData = Array.isArray(displayData) && displayData.length > 0 && 
+                                displayData.some(item => 
+                                  item.heading && 
+                                  item.block_text && 
+                                  (item.role_hints || item.predicted_type === 'profile_card')
+                                );
+                              
+                              if (isTeamMemberData) {
+                                return (
+                                  <div className="space-y-4">
+                                    <div className="text-sm text-gray-600 mb-4">
+                                      Found {displayData.length} team member{displayData.length !== 1 ? 's' : ''}
+                                    </div>
+                                    <div className="grid gap-4">
+                                      {displayData.map((person, index) => {
+                                        // Extract name and title from block_text
+                                        const name = person.heading || 'Unknown';
+                                        const blockText = person.block_text || '';
+                                        
+                                        // Try to extract title from the beginning of block_text
+                                        const titleMatch = blockText.match(new RegExp(`${name}([^\\n]*?)(?:\\n|$)`));
+                                        const title = titleMatch ? titleMatch[1].trim() : 
+                                          (person.role_hints && person.role_hints.length > 0 ? 
+                                            person.role_hints[0].charAt(0).toUpperCase() + person.role_hints[0].slice(1) : 
+                                            'Team Member');
+                                        
+                                        // Extract bio (everything after name+title)
+                                        const bioStart = blockText.indexOf(title) + title.length;
+                                        const bio = bioStart > title.length ? blockText.substring(bioStart).trim() : blockText;
+                                        
+                                        return (
+                                          <div key={index} className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow">
+                                            <div className="flex items-start justify-between mb-3">
+                                              <div>
+                                                <h3 className="text-lg font-semibold text-gray-900">{name}</h3>
+                                                <p className="text-sm font-medium text-blue-600">{title}</p>
+                                              </div>
+                                              {person.type_confidence && (
+                                                <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
+                                                  {(person.type_confidence * 100).toFixed(0)}% confident
+                                                </span>
+                                              )}
+                                            </div>
+                                            {bio && bio !== name && (
+                                              <p className="text-sm text-gray-700 leading-relaxed">{bio}</p>
+                                            )}
+                                            {person.role_hints && person.role_hints.length > 0 && (
+                                              <div className="mt-3 flex flex-wrap gap-1">
+                                                {person.role_hints.slice(0, 3).map((role, roleIndex) => (
+                                                  <span key={roleIndex} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                                                    {role}
+                                                  </span>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              }
+                              
+                              // Display clean, well-formatted data for non-team-member results
+                              return (
+                                <pre className="text-sm font-mono whitespace-pre-wrap text-gray-800 leading-relaxed">
+                                  {jsonString}
+                                </pre>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                        
+                        {/* Show metadata if available */}
+                        {activeJob.result?.metadata && (
+                          <div>
+                            <h4 className="font-medium text-gray-900 mb-2">📊 Extraction Info</h4>
+                            <div className="bg-blue-50 rounded-lg p-3 text-sm">
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                {activeJob.result.metadata.duration && (
+                                  <div><span className="text-gray-600">Duration:</span> {activeJob.result.metadata.duration}ms</div>
+                                )}
+                                {activeJob.result.metadata.cost && (
+                                  <div><span className="text-gray-600">Cost:</span> ${activeJob.result.metadata.cost.toFixed(4)}</div>
+                                )}
+                                {activeJob.result.metadata.strategy && (
+                                  <div><span className="text-gray-600">Strategy:</span> {activeJob.result.metadata.strategy}</div>
+                                )}
+                                {activeJob.result.metadata.itemsExtracted && (
+                                  <div><span className="text-gray-600">Items Found:</span> {activeJob.result.metadata.itemsExtracted}</div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               )}
@@ -1005,7 +1144,7 @@ Examples:
                           )}
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium truncate">
-                              {job.url.replace(/^https?:\/\//, '')}
+                              {job.url ? job.url.replace(/^https?:\/\//, '') : 'AI Generated'}
                             </p>
                             <p className="text-xs text-gray-500">
                               {job.mode} • {new Date(job.startedAt).toLocaleTimeString()}

@@ -1,5 +1,6 @@
 // AWS Lambda handler for Atlas Codex API - Fixed version
 const AWS = require('aws-sdk');
+const fetch = require('node-fetch');
 
 // Initialize AWS services
 const dynamodb = new AWS.DynamoDB.DocumentClient();
@@ -235,9 +236,37 @@ exports.handler = async (event) => {
           Item: jobItem
         }).promise();
         
-        // Demo: Complete with mock extracted data
+        // Process with improved extraction system
         setTimeout(async () => {
           try {
+            // Import the improved worker
+            const { processWithPlanBasedSystem } = require('../../api/worker-enhanced.js');
+            
+            // Convert the API body format to worker format
+            const extractionParams = {
+              url: body.url,
+              extractionInstructions: body.extractionInstructions || body.prompt || `Extract data from ${body.url}`,
+              outputSchema: body.outputSchema || {
+                type: 'object',
+                properties: {
+                  title: { type: 'string' },
+                  content: { type: 'string' },
+                  metadata: { type: 'object' }
+                }
+              },
+              postProcessing: body.postProcessing || null,
+              formats: body.formats || ['structured']
+            };
+            
+            // Fetch the HTML content first
+            console.log(`Fetching content from: ${body.url}`);
+            const response = await fetch(body.url);
+            const htmlContent = await response.text();
+            
+            // Process the extraction job with the improved system
+            const extractionResult = await processWithPlanBasedSystem(htmlContent, extractionParams);
+            
+            // Update job with real extraction results
             await dynamodb.update({
               TableName: 'atlas-codex-jobs',
               Key: { id: jobId },
@@ -248,27 +277,43 @@ exports.handler = async (event) => {
                 '#completedAt': 'completedAt'
               },
               ExpressionAttributeValues: {
-                ':status': 'completed',
+                ':status': extractionResult.success ? 'completed' : 'failed',
                 ':result': {
                   url: body.url,
-                  extracted: {
-                    title: 'Sample Product',
-                    price: 99.99,
-                    description: 'This is extracted data'
-                  },
-                  confidence: 0.95,
-                  evidence: {
-                    hash: 'sha256:extract123',
-                    timestamp: new Date().toISOString()
-                  }
+                  data: extractionResult.data || null,
+                  metadata: extractionResult.metadata || {},
+                  evidence: extractionResult.evidence || null,
+                  error: extractionResult.error || null,
+                  extractionNote: extractionResult.data?.extractionNote || null
                 },
                 ':completedAt': Date.now()
               }
             }).promise();
-          } catch (e) {
-            console.error('Error updating job:', e);
+          } catch (error) {
+            console.error('Error processing extraction job:', error);
+            
+            // Update job with error status
+            await dynamodb.update({
+              TableName: 'atlas-codex-jobs',
+              Key: { id: jobId },
+              UpdateExpression: 'SET #status = :status, #result = :result, #completedAt = :completedAt',
+              ExpressionAttributeNames: {
+                '#status': 'status',
+                '#result': 'result',
+                '#completedAt': 'completedAt'
+              },
+              ExpressionAttributeValues: {
+                ':status': 'failed',
+                ':result': {
+                  url: body.url,
+                  error: error.message,
+                  timestamp: new Date().toISOString()
+                },
+                ':completedAt': Date.now()
+              }
+            }).promise();
           }
-        }, 3000);
+        }, 1000);
         
         return {
           statusCode: 200,
