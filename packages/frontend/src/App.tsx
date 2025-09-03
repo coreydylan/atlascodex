@@ -44,7 +44,7 @@ import {
   FileCode,
 } from 'lucide-react';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev';
+const API_BASE = import.meta.env.VITE_API_URL || process.env.REACT_APP_API_URL || 'https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev';
 
 type Mode = 'scrape' | 'search' | 'map' | 'crawl';
 type Format = 'markdown' | 'html' | 'json' | 'links' | 'screenshot' | 'summary';
@@ -224,7 +224,7 @@ function App() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': process.env.REACT_APP_API_KEY || 'atlas-prod-key-2024',
+            'x-api-key': import.meta.env.VITE_API_KEY || process.env.REACT_APP_API_KEY || 'test-key-123',
           },
           body: JSON.stringify({
             prompt: url,
@@ -304,7 +304,7 @@ function App() {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'x-api-key': process.env.REACT_APP_API_KEY || 'atlas-prod-key-2024',
+              'x-api-key': import.meta.env.VITE_API_KEY || process.env.REACT_APP_API_KEY || 'test-key-123',
             },
             body: JSON.stringify({
               prompt: fullUrl,
@@ -361,13 +361,18 @@ function App() {
         }
       }
       
-      // Use extract endpoint for all modes initially
+      // Evidence-First Processing: Let the backend intelligent system handle all template matching
+      // No primitive keyword matching - all requests go through the evidence-first API
+      console.log('🧠 Using evidence-first processing - backend will intelligently determine optimal extraction approach');
+
+      // Use extract endpoint for all modes
       const endpoint = '/api/extract';
       
       const requestBody: any = {
         url: processedUrl,
-        strategy: 'auto', // Let DIP system choose the best strategy
+        strategy: 'auto', // Let Evidence-First system choose the best strategy
         type: mode,
+        useEvidenceFirst: true, // Enable evidence-first processing
         ...extractedParams // This now includes extractionInstructions, outputSchema, postProcessing from AI
       };
       
@@ -490,7 +495,7 @@ function App() {
         // Use the correct /api/extract/{jobId} endpoint
         let response = await fetch(`${API_BASE}/api/extract/${jobId}`, {
           headers: {
-            'x-api-key': process.env.REACT_APP_API_KEY || 'atlas-prod-key-2024',
+            'x-api-key': import.meta.env.VITE_API_KEY || process.env.REACT_APP_API_KEY || 'test-key-123',
           },
         });
         
@@ -948,6 +953,21 @@ Examples:
                           </div>
                         </div>
                         
+                        {/* Template System Badge */}
+                        {activeJob.result?.templateEnhanced && (
+                          <div className="mb-3">
+                            <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-lg p-3">
+                              <div className="flex items-center gap-2 mb-1">
+                                <Sparkles className="w-4 h-4 text-purple-600" />
+                                <span className="text-sm font-semibold text-purple-900">Template-Enhanced Extraction</span>
+                              </div>
+                              <p className="text-xs text-purple-700">
+                                Used intelligent template matching for {activeJob.result.metadata?.templateId || 'optimized'} extraction pattern
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                        
                         {/* Show metadata if available */}
                         {activeJob.result?.metadata && (
                           <div>
@@ -965,6 +985,12 @@ Examples:
                                 )}
                                 {activeJob.result.metadata.itemsExtracted && (
                                   <div><span className="text-gray-600">Items Found:</span> {activeJob.result.metadata.itemsExtracted}</div>
+                                )}
+                                {activeJob.result.metadata.source && (
+                                  <div><span className="text-gray-600">Source:</span> {activeJob.result.metadata.source}</div>
+                                )}
+                                {activeJob.result.metadata.templateId && (
+                                  <div><span className="text-gray-600">Template:</span> {activeJob.result.metadata.templateId}</div>
                                 )}
                               </div>
                             </div>
