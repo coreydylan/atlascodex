@@ -5,8 +5,24 @@
   "framework": null,
   "rewrites": [
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "source": "/api/templates/recommend",
+      "destination": "/api/templates/index.js"
+    },
+    {
+      "source": "/api/templates/extract", 
+      "destination": "/api/templates/index.js"
+    },
+    {
+      "source": "/api/templates/stats",
+      "destination": "/api/templates/index.js"
+    },
+    {
+      "source": "/api/templates/eval",
+      "destination": "/api/templates/index.js"
+    },
+    {
+      "source": "/api/templates/health",
+      "destination": "/api/templates/index.js"
     }
   ],
   "headers": [
