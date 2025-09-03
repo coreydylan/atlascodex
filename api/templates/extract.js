@@ -48,17 +48,20 @@ module.exports = async (req, res) => {
       let extractedData;
       if (extractionResponse.ok) {
         const apiResult = await extractionResponse.json();
-        console.log('Atlas Codex API result:', apiResult);
+        console.log('Atlas Codex API result:', JSON.stringify(apiResult, null, 2));
         
-        // Extract the actual data from the API response
-        extractedData = apiResult.result?.data || apiResult.data || null;
+        // Extract the actual data from the API response - try multiple possible paths
+        extractedData = apiResult.result?.data || apiResult.data || apiResult.result || null;
         
-        if (!extractedData) {
-          console.log('No data in API response, using template fallback');
+        if (!extractedData || (Array.isArray(extractedData) && extractedData.length === 0)) {
+          console.log('No useful data in API response, using template fallback');
           extractedData = getTemplateFallbackData(templateMatch, url);
+        } else {
+          console.log('Successfully extracted data from API:', extractedData);
         }
       } else {
-        console.log(`API call failed: ${extractionResponse.status}, using template fallback`);
+        const errorText = await extractionResponse.text();
+        console.log(`API call failed: ${extractionResponse.status} - ${errorText}`);
         extractedData = getTemplateFallbackData(templateMatch, url);
       }
       
@@ -141,7 +144,10 @@ function analyzeForTemplate(url, prompt) {
   
   // People/Team template
   if (promptLower.includes('team') || promptLower.includes('people') || 
-      promptLower.includes('staff') || promptLower.includes('members')) {
+      promptLower.includes('staff') || promptLower.includes('members') ||
+      promptLower.includes('name') || promptLower.includes('bio') ||
+      promptLower.includes('title') || urlLower.includes('people') ||
+      urlLower.includes('team') || urlLower.includes('staff')) {
     return {
       id: 'people_directory_v1_0_0', 
       confidence: 0.92,
