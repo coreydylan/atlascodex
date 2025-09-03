@@ -28,6 +28,15 @@ export interface ExtractionRequest {
   forceStrategy?: boolean;
   headers?: Record<string, string>;
   timeout?: number;
+  // Template system integration
+  useTemplates?: boolean;
+  preferredTemplate?: string;
+  generateDisplay?: boolean;
+  userContext?: {
+    device?: 'mobile' | 'tablet' | 'desktop';
+    locale?: string;
+    preferences?: Record<string, any>;
+  };
 }
 
 export interface ExtractionResult {
@@ -46,6 +55,17 @@ export interface ExtractionResult {
     adaptiveSelectors?: Record<string, string>;
   };
   error?: string;
+  // Template system results
+  template?: {
+    id: string;
+    confidence: number;
+    match_reasons: string[];
+  };
+  displaySpec?: {
+    template_id: string;
+    spec: any;
+    confidence: number;
+  };
 }
 
 export class ExtractionService {
@@ -72,6 +92,19 @@ export class ExtractionService {
   async extract(request: ExtractionRequest): Promise<ExtractionResult> {
     const startTime = Date.now();
     const domain = extractDomain(request.url);
+    
+    // Template-enhanced extraction if enabled
+    if (request.useTemplates) {
+      try {
+        const { templateService } = await import('./template-service');
+        return await templateService.extractWithTemplates({
+          ...request,
+          displayGeneration: request.generateDisplay
+        });
+      } catch (error) {
+        console.warn('Template system unavailable, falling back to standard extraction:', error);
+      }
+    }
     
     // Get or determine strategy
     let strategy = request.strategy;

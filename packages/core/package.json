@@ -9,7 +9,15 @@
     "dev": "tsc --watch",
     "test": "jest",
     "lint": "eslint src/**/*.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "eval": "node dist/cli.js eval",
+    "eval:vmota": "node dist/cli.js eval --suite vmota",
+    "eval:html": "node dist/cli.js eval --format html",
+    "templates": "node dist/cli.js templates",
+    "stats": "node dist/cli.js stats"
+  },
+  "bin": {
+    "atlas": "dist/cli.js"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.879.0",

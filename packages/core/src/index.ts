@@ -7,6 +7,13 @@ export * from './dip-service';
 export * from './firecrawl-service';
 export * from './extraction-service';
 
+// Export template system (Production-Grade Template-Driven Smart Display System)
+export * from './template-types';
+export * from './template-library';
+export * from './template-service';
+export * from './core-templates';
+export * from './evaluation-framework';
+
 // Job types
 export const JobStatus = z.enum(['pending', 'running', 'completed', 'failed']);
 export const JobType = z.enum(['scrape', 'extract', 'crawl']);
