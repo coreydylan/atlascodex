@@ -343,6 +343,16 @@ Return ONLY the JSON response - no explanations or additional text.`;
     const url = (params.url || '').toLowerCase();
     const htmlLower = htmlContent.toLowerCase();
     
+    // Check for forceMultiPage flag first - highest priority
+    if (params.forceMultiPage === true) {
+      return {
+        required: true,
+        reason: 'force_multipage_enabled',
+        confidence: 1.0,
+        forced: true
+      };
+    }
+    
     // Explicit multi-page keywords in user request
     const explicitKeywords = [
       'all pages', 'entire site', 'full site', 'navigate through', 

@@ -204,7 +204,8 @@ async function handleExtract(method, body, headers) {
           },
           postProcessing: params.postProcessing || null,
           formats: params.formats || ['structured'],
-          UNIFIED_EXTRACTOR_ENABLED: params.UNIFIED_EXTRACTOR_ENABLED
+          UNIFIED_EXTRACTOR_ENABLED: params.UNIFIED_EXTRACTOR_ENABLED,
+          forceMultiPage: params.forceMultiPage || false
         };
         
         // Process with unified extractor system
@@ -402,6 +403,7 @@ exports.handler = async (event) => {
               extractionInstructions: params.prompt || params.input,
               formats: aiResult.formats || ['structured'],
               UNIFIED_EXTRACTOR_ENABLED: params.UNIFIED_EXTRACTOR_ENABLED,
+              forceMultiPage: params.forceMultiPage || false,
               ...aiResult.params
             };
             
