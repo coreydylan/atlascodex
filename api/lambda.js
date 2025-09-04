@@ -1,4 +1,4 @@
-// Atlas Codex API Lambda Handler with GPT-5 Support
+// Atlas Codex API Lambda Handler with GPT-5 Support - Updated 2025-09-04
 const { DynamoDBClient, PutItemCommand, GetItemCommand, ScanCommand } = require('@aws-sdk/client-dynamodb');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const RolloutConfig = require('../config/gpt5-rollout');
