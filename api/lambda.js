@@ -432,7 +432,7 @@ exports.handler = async (event) => {
         try {
           const params = JSON.parse(body);
           const aiResult = await processNaturalLanguage(params.prompt || params.input, {
-            apiKey: params.apiKey || headers['x-openai-key'] || process.env.OPENAI_API_KEY
+            apiKey: params.apiKey || headers['x-openai-key'] || headers['x-api-key'] || process.env.OPENAI_API_KEY
           });
           
           // Auto-execute extraction with improved plan-based system
