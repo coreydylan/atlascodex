@@ -158,7 +158,7 @@ resources:
     JobsTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: ${self:service}-jobs
+        TableName: ${self:service}-jobs-${self:provider.stage}
         BillingMode: PAY_PER_REQUEST
         AttributeDefinitions:
           - AttributeName: id
@@ -170,7 +170,7 @@ resources:
     JobQueue:
       Type: AWS::SQS::Queue
       Properties:
-        QueueName: ${self:service}-queue
+        QueueName: ${self:service}-queue-${self:provider.stage}
         VisibilityTimeout: 360  # 6 minutes (longer than Lambda timeout)
         MessageRetentionPeriod: 86400  # 1 day
         ReceiveMessageWaitTimeSeconds: 20  # Long polling
@@ -185,7 +185,7 @@ resources:
     JobDeadLetterQueue:
       Type: AWS::SQS::Queue
       Properties:
-        QueueName: ${self:service}-dlq
+        QueueName: ${self:service}-dlq-${self:provider.stage}
         MessageRetentionPeriod: 1209600  # 14 days
         VisibilityTimeout: 360
     
@@ -203,7 +203,7 @@ resources:
     WebSocketApi:
       Type: AWS::ApiGatewayV2::Api
       Properties:
-        Name: ${self:service}-websocket
+        Name: ${self:service}-websocket-${self:provider.stage}
         ProtocolType: WEBSOCKET
         RouteSelectionExpression: "$request.body.action"
     
@@ -211,7 +211,7 @@ resources:
     ConnectionsTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: ${self:service}-connections
+        TableName: ${self:service}-connections-${self:provider.stage}
         BillingMode: PAY_PER_REQUEST
         AttributeDefinitions:
           - AttributeName: connectionId
