@@ -16,14 +16,14 @@
   "installCommand": "cd packages/frontend && npm install",
   "devCommand": "cd packages/frontend && npm run dev",
   "env": {
-    "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/prod",
-    "VITE_API_KEY": "prod-28d4434781ec4cef8b68b00a8e84a6f49d133aab1e605504604a088e33ac97f2",
+    "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
+    "VITE_API_KEY": "test-key-123",
     "ENVIRONMENT": "production"
   },
   "build": {
     "env": {
-      "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/prod",
-      "VITE_API_KEY": "prod-28d4434781ec4cef8b68b00a8e84a6f49d133aab1e605504604a088e33ac97f2",
+      "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
+      "VITE_API_KEY": "test-key-123",
       "ENVIRONMENT": "production"
     }
   },
@@ -57,7 +57,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/prod/:path*"
+      "destination": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/:path*"
     }
   ]
 }
