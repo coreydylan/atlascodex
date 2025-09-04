@@ -1,23 +1,23 @@
 // api/services/model-selector.js
 const ModelSelector = {
   models: {
-    'gpt-5': { 
-      inputPrice: 1.25, 
+    'gpt-4o': { 
+      inputPrice: 2.50, 
       outputPrice: 10, 
       maxTokens: 128000,
       bestFor: 'complex reasoning, production workloads'
     },
-    'gpt-5-mini': { 
-      inputPrice: 0.25, 
-      outputPrice: 2, 
-      maxTokens: 64000,
+    'gpt-4o-mini': { 
+      inputPrice: 0.15, 
+      outputPrice: 0.60, 
+      maxTokens: 128000,
       bestFor: 'balanced performance and cost'
     },
-    'gpt-5-nano': { 
-      inputPrice: 0.05, 
-      outputPrice: 0.40, 
-      maxTokens: 32000,
-      bestFor: 'high-volume, simple tasks'
+    'gpt-4-turbo': { 
+      inputPrice: 10, 
+      outputPrice: 30, 
+      maxTokens: 128000,
+      bestFor: 'highest quality reasoning'
     }
   },
 
@@ -26,16 +26,16 @@ const ModelSelector = {
     
     // High accuracy or complex reasoning required
     if (accuracy > 0.95 || complexity > 0.8) {
-      return 'gpt-5';
+      return 'gpt-4-turbo';
     }
     
     // Budget conscious with moderate requirements
     if (budget < 0.001 && complexity < 0.3) {
-      return 'gpt-5-nano';
+      return 'gpt-4o-mini';
     }
     
     // Default to balanced option
-    return 'gpt-5-mini';
+    return 'gpt-4o';
   },
 
   estimateCost(model, inputTokens, outputTokens) {

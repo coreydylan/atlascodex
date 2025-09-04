@@ -7,9 +7,9 @@
 const RolloutConfig = {
   // Gradual rollout percentages by environment
   trafficPercentage: {
-    development: 0,   // Disable GPT-5 temporarily due to API issues
-    staging: 0,       // Disable GPT-5 temporarily due to API issues
-    production: 0     // Disable GPT-5 temporarily due to API issues
+    development: 100,  // Full GPT-5 in dev for testing
+    staging: 50,       // 50% traffic in staging for A/B testing
+    production: 10     // Start with 10% in production
   },
   
   // GPT-5 feature flags
