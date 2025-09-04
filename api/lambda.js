@@ -425,6 +425,9 @@ exports.handler = async (event) => {
 
     // AI Processing endpoint - Direct processing (no queuing)
     if (path === '/api/ai/process' || path === '/dev/api/ai/process') {
+      if (method === 'OPTIONS') {
+        return createResponse(200, {});
+      }
       if (method === 'POST') {
         try {
           const params = JSON.parse(body);
