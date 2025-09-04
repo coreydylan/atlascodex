@@ -16,7 +16,8 @@ class GPT5Client {
       complexity = 0.5, 
       budget = 0.01, 
       requiresReasoning = false,
-      outputFormat = 'text'
+      outputFormat = 'text',
+      outputSchema = null  // NEW: JSON Schema for structured outputs
     } = params;
 
     // Select optimal model
@@ -27,17 +28,38 @@ class GPT5Client {
     });
 
     try {
-      const response = await this.openai.chat.completions.create({
+      // Use correct parameter based on model
+      const isGPT5 = model.includes('gpt-5');
+      const tokenParam = isGPT5 ? 'max_completion_tokens' : 'max_tokens';
+      
+      const requestParams = {
         model,
         messages,
-        temperature: 0.3,
-        max_tokens: this.getMaxTokens(model),
-        reasoning: requiresReasoning,
-        response_format: outputFormat === 'json' 
-          ? { type: 'json_object' } 
-          : undefined,
-        verbosity: process.env.NODE_ENV === 'development' ? 'verbose' : 'minimal'
-      });
+        // GPT-5 only supports default temperature
+        [tokenParam]: this.getMaxTokens(model),
+        // Structured outputs with guaranteed schema compliance
+        response_format: outputSchema 
+          ? { 
+              type: 'json_schema',
+              json_schema: {
+                name: 'extraction_response',
+                strict: true,  // Guarantee 100% schema compliance
+                schema: outputSchema
+              }
+            }
+          : outputFormat === 'json' 
+            ? { type: 'json_object' } 
+            : undefined
+      };
+      
+      // Add temperature for non-GPT-5 models only
+      if (!isGPT5) {
+        requestParams.temperature = 0.3;
+      }
+      
+      // Note: reasoning_effort and verbosity may be added in future GPT-5 updates
+      
+      const response = await this.openai.chat.completions.create(requestParams);
 
       return {
         content: response.choices[0].message.content,
@@ -82,6 +104,16 @@ class GPT5Client {
       'gpt-5-nano': 32000
     };
     return limits[model] || 16000;
+  }
+
+  /**
+   * Get verbosity setting based on task complexity
+   * GPT-5 supports: low, medium (default), high
+   */
+  getVerbosity(complexity) {
+    if (complexity < 0.3) return 'low';      // Simple tasks - concise answers
+    if (complexity < 0.7) return 'medium';   // Standard tasks - balanced
+    return 'high';                           // Complex tasks - comprehensive
   }
 }
 

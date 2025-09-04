@@ -1,9 +1,35 @@
-// Atlas Codex API Lambda Handler
+// Atlas Codex API Lambda Handler with GPT-5 Support
 const { DynamoDBClient, PutItemCommand, GetItemCommand, ScanCommand } = require('@aws-sdk/client-dynamodb');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
-const { processNaturalLanguage } = require('./atlas-generator-integration');
+const RolloutConfig = require('../config/gpt5-rollout');
+
+// GPT-5 Migration: Conditional imports based on rollout
+let processNaturalLanguage;
+let processWithUnifiedExtractor;
+
+if (RolloutConfig.shouldUseGPT5()) {
+  console.log('🚀 GPT-5 ACTIVE: Loading V2 implementations');
+  const { AIProcessorV2 } = require('./ai-processor-v2');
+  const { EvidenceFirstBridgeV2 } = require('./evidence-first-bridge-v2');
+  
+  // Create wrapper functions for V2 implementations
+  const aiProcessor = new AIProcessorV2();
+  const evidenceBridge = new EvidenceFirstBridgeV2();
+  
+  processNaturalLanguage = async (input, options) => {
+    return await aiProcessor.processNaturalLanguage(input, options);
+  };
+  
+  processWithUnifiedExtractor = async (html, params) => {
+    return await evidenceBridge.processWithEvidenceFirst(html, params);
+  };
+} else {
+  console.log('📦 GPT-4 ACTIVE: Loading legacy implementations');
+  processNaturalLanguage = require('./atlas-generator-integration').processNaturalLanguage;
+  processWithUnifiedExtractor = require('./evidence-first-bridge').processWithUnifiedExtractor;
+}
+
 const { processWithPlanBasedSystem } = require('./worker-enhanced');
-const { processWithUnifiedExtractor } = require('./evidence-first-bridge');
 
 const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const sqs = new SQSClient({ region: process.env.AWS_REGION || 'us-west-2' });
