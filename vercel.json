@@ -57,12 +57,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/:path*"
+      "destination": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/prod/:path*"
     }
-  ],
-  "functions": {
-    "api/*.js": {
-      "maxDuration": 60
-    }
-  }
+  ]
 }
