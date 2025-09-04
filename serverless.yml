@@ -94,11 +94,33 @@ functions:
       - http:
           path: /{proxy+}
           method: ANY
-          cors: true
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - x-api-key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+            allowCredentials: false
       - http:
           path: /
           method: ANY
-          cors: true
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - x-api-key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+            allowCredentials: false
     timeout: 120
     memorySize: 1024
     environment:
