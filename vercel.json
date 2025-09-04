@@ -18,13 +18,13 @@
   "env": {
     "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
     "VITE_API_KEY": "dev-e41d8c40f0bc54fcc590dc54b7ebe138344afe9dc41690c38bd99c838116405c",
-    "ENVIRONMENT": "development"
+    "ENVIRONMENT": "preview"
   },
   "build": {
     "env": {
-      "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
-      "VITE_API_KEY": "dev-e41d8c40f0bc54fcc590dc54b7ebe138344afe9dc41690c38bd99c838116405c",
-      "ENVIRONMENT": "development"
+      "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/prod",
+      "VITE_API_KEY": "prod-28d4434781ec4cef8b68b00a8e84a6f49d133aab1e605504604a088e33ac97f2",
+      "ENVIRONMENT": "production"
     }
   },
   "headers": [
