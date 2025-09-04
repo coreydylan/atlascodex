@@ -98,7 +98,7 @@ function cleanExtractionResult(result) {
 // CORS headers
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type,X-Api-Key,Authorization,x-api-key',
+  'Access-Control-Allow-Headers': 'Content-Type,X-Api-Key,Authorization,x-api-key,X-Amz-Date,X-Amz-Security-Token,X-Amz-User-Agent,X-Amzn-Trace-Id',
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
   'Access-Control-Max-Age': '86400'
 };
@@ -386,7 +386,11 @@ exports.handler = async (event) => {
           OPENAI_API_KEY_present: !!process.env.OPENAI_API_KEY,
           OPENAI_API_KEY_length: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0,
           OPENAI_API_KEY_prefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 10) : null,
-          all_env_keys: Object.keys(process.env).filter(k => k.includes('OPENAI') || k.includes('UNIFIED')),
+          GPT5_ENABLED: process.env.GPT5_ENABLED,
+          GPT5_MODEL_SELECTION: process.env.GPT5_MODEL_SELECTION,
+          GPT5_FALLBACK_ENABLED: process.env.GPT5_FALLBACK_ENABLED,
+          GPT5_REASONING_ENABLED: process.env.GPT5_REASONING_ENABLED,
+          all_env_keys: Object.keys(process.env).filter(k => k.includes('OPENAI') || k.includes('UNIFIED') || k.includes('GPT5')),
           lambda_region: process.env.AWS_REGION,
           lambda_function_name: process.env.AWS_LAMBDA_FUNCTION_NAME
         }

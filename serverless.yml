@@ -86,6 +86,9 @@ functions:
         - 'api/ai-processor.js'
         - 'api/worker-enhanced.js'  # Include our improved extraction system
         - 'api/evidence-first-bridge.js'  # Include unified extractor
+        - 'api/services/**'  # Include GPT-5 services
+        - 'api/ai-processor-v2.js'  # Include GPT-5 AI processor
+        - 'api/evidence-first-bridge-v2.js'  # Include GPT-5 evidence bridge
         - 'node_modules/**'
     events:
       - http:

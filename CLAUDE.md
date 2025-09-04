@@ -502,18 +502,11 @@ npm run typecheck
 
 Atlas Codex includes a specialized Claude AI agent for comprehensive pull request analysis:
 
-**Location**: `agents/pr-analyzer/`
+**Location**: `start here - pr analyzer/`
 
 **Usage**:
-```bash
-# Review a pull request
-./agents/pr-analyzer/invoke-agent.sh 123
-
-# Security-focused review
-./agents/pr-analyzer/invoke-agent.sh -c security-check 456
-
-# Post review as comment
-./agents/pr-analyzer/invoke-agent.sh -p 789
+```
+Hey Claude, please read the pr-analyzer.md file in the "start here - pr analyzer" folder and act as that agent. Review PR #123.
 ```
 
 **Features**:
@@ -530,6 +523,6 @@ Atlas Codex includes a specialized Claude AI agent for comprehensive pull reques
 - `/extraction-check` - Validate extraction logic integrity
 - `/quick-review` - Brief assessment for small changes
 
-**Integration**: Use with Claude Code by referencing `agents/pr-analyzer/AGENT_PROMPT.md`
+**Integration**: Direct Claude to read the `pr-analyzer.md` file in the `start here - pr analyzer/` folder and act as that agent.
 
-See [agents/pr-analyzer/README.md](agents/pr-analyzer/README.md) for complete documentation.
+See `start here - pr analyzer/README.md` for usage instructions and `pr-analyzer.md` for the complete agent definition.

@@ -16,15 +16,15 @@
   "installCommand": "cd packages/frontend && npm install",
   "devCommand": "cd packages/frontend && npm run dev",
   "env": {
-    "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
-    "VITE_API_KEY": "test-key-123",
-    "ENVIRONMENT": "production"
+    "VITE_API_URL": "@vite_api_url",
+    "VITE_API_KEY": "@vite_api_key",
+    "ENVIRONMENT": "@environment"
   },
   "build": {
     "env": {
-      "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
-      "VITE_API_KEY": "test-key-123",
-      "ENVIRONMENT": "production"
+      "VITE_API_URL": "@vite_api_url",
+      "VITE_API_KEY": "@vite_api_key",
+      "ENVIRONMENT": "@environment"
     }
   },
   "headers": [
