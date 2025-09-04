@@ -187,8 +187,31 @@ async function handleExtract(method, body, headers) {
         console.log(`Processing extraction immediately for job ${jobId}`);
         
         // Fetch HTML content (Node.js 20 has built-in fetch)
-        const response = await fetch(params.url);
-        const htmlContent = await response.text();
+        const fetchTimeout = params.timeout ? (params.timeout * 1000) / 2 : 30000; // Half of extraction timeout or 30s
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), fetchTimeout);
+        
+        try {
+          const response = await fetch(params.url, { 
+            signal: controller.signal,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (compatible; AtlasCodex/1.0)'
+            }
+          });
+          clearTimeout(timeoutId);
+          
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          
+          const htmlContent = await response.text();
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          if (fetchError.name === 'AbortError') {
+            throw new Error(`Request timeout after ${fetchTimeout/1000}s while fetching ${params.url}`);
+          }
+          throw new Error(`Failed to fetch ${params.url}: ${fetchError.message}`);
+        }
         
         // Convert API params to worker format
         const extractionParams = {
@@ -205,7 +228,11 @@ async function handleExtract(method, body, headers) {
           postProcessing: params.postProcessing || null,
           formats: params.formats || ['structured'],
           UNIFIED_EXTRACTOR_ENABLED: params.UNIFIED_EXTRACTOR_ENABLED,
-          forceMultiPage: params.forceMultiPage || false
+          forceMultiPage: params.forceMultiPage || false,
+          timeout: params.timeout || 60, // Default 60 seconds for extraction operations
+          maxPages: params.maxPages || 5,
+          maxLinks: params.maxLinks || 20,
+          maxDepth: params.maxDepth || 2
         };
         
         // Process with unified extractor system
@@ -404,6 +431,10 @@ exports.handler = async (event) => {
               formats: aiResult.formats || ['structured'],
               UNIFIED_EXTRACTOR_ENABLED: params.UNIFIED_EXTRACTOR_ENABLED,
               forceMultiPage: params.forceMultiPage || false,
+              timeout: params.timeout || 60, // Default 60 seconds for extraction operations
+              maxPages: params.maxPages || 5,
+              maxLinks: params.maxLinks || 20,
+              maxDepth: params.maxDepth || 2,
               ...aiResult.params
             };
             

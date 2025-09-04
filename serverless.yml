@@ -11,6 +11,11 @@ provider:
     MASTER_API_KEY: ${env:MASTER_API_KEY, 'test-key-123'}
     OPENAI_API_KEY: ${env:OPENAI_API_KEY, ''}
     UNIFIED_EXTRACTOR_ENABLED: ${env:UNIFIED_EXTRACTOR_ENABLED, 'false'}
+    # GPT-5 Configuration
+    GPT5_ENABLED: ${env:GPT5_ENABLED, 'true'}
+    GPT5_MODEL_SELECTION: ${env:GPT5_MODEL_SELECTION, 'auto'}
+    GPT5_FALLBACK_ENABLED: ${env:GPT5_FALLBACK_ENABLED, 'true'}
+    GPT5_REASONING_ENABLED: ${env:GPT5_REASONING_ENABLED, 'true'}
     QUEUE_URL: 
       Ref: JobQueue
 
@@ -91,7 +96,7 @@ functions:
           path: /
           method: ANY
           cors: true
-    timeout: 30
+    timeout: 120
     memorySize: 1024
     environment:
       WEBSOCKET_API_ENDPOINT:
