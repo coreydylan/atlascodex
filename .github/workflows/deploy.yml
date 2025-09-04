@@ -33,11 +33,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Serverless v3
+        run: npm install -g serverless@3
+
       - name: Check for serverless.yml
         run: test -f serverless.yml || exit 1
 
       - name: Validate serverless config
-        run: npx serverless print --stage dev > /dev/null
+        run: serverless print --stage dev > /dev/null
 
   # Deploy to Development (main branch)
   deploy-dev:
@@ -64,7 +67,7 @@ jobs:
           # Use production deployment script logic
           rm -rf node_modules package-lock.json
           npm install --production
-          npm install -g serverless
+          npm install -g serverless@3
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -80,7 +83,7 @@ jobs:
           UNIFIED_EXTRACTOR_ENABLED: true
         run: |
           echo "🚀 Deploying to development environment..."
-          npx serverless deploy --stage dev --verbose
+          serverless deploy --stage dev --verbose
           
       - name: Update Lambda Alias
         run: |
@@ -142,7 +145,7 @@ jobs:
         run: |
           rm -rf node_modules package-lock.json
           npm install --production
-          npm install -g serverless
+          npm install -g serverless@3
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -170,7 +173,7 @@ jobs:
           UNIFIED_EXTRACTOR_ENABLED: true
         run: |
           echo "🚀 Deploying to production environment..."
-          npx serverless deploy --stage prod --verbose
+          serverless deploy --stage prod --verbose
           
       - name: Canary deployment (10% traffic)
         run: |
