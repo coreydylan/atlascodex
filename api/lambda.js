@@ -191,6 +191,7 @@ async function handleExtract(method, body, headers) {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), fetchTimeout);
         
+        let htmlContent;
         try {
           const response = await fetch(params.url, { 
             signal: controller.signal,
@@ -204,7 +205,7 @@ async function handleExtract(method, body, headers) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
           }
           
-          const htmlContent = await response.text();
+          htmlContent = await response.text();
         } catch (fetchError) {
           clearTimeout(timeoutId);
           if (fetchError.name === 'AbortError') {
