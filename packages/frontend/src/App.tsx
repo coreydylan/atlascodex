@@ -6,6 +6,7 @@ bg-orange-100 text-orange-600 border-orange-300 bg-gray-50 border-gray-200
 hover:bg-gray-100 bg-orange-50 border-orange-200 hover:bg-gray-50
 bg-white text-gray-900 text-gray-600 min-h-screen border-b
 text-2xl font-semibold text-sm font-medium
+CORS fix update - v1
 */
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
