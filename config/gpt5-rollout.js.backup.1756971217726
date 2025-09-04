@@ -1,0 +1,34 @@
+// config/gpt5-rollout.js
+const RolloutConfig = {
+  // Percentage of traffic to route to GPT-5
+  trafficPercentage: {
+    development: 100,
+    staging: 50,
+    production: 10 // Start with 10% in production
+  },
+
+  // Feature flags
+  features: {
+    reasoning: true,
+    autoModelSelection: true,
+    costOptimization: true,
+    fallbackEnabled: true
+  },
+
+  // Gradual increase schedule
+  schedule: [
+    { date: '2025-09-10', percentage: 10 },
+    { date: '2025-09-15', percentage: 25 },
+    { date: '2025-09-20', percentage: 50 },
+    { date: '2025-09-25', percentage: 75 },
+    { date: '2025-10-01', percentage: 100 }
+  ],
+
+  shouldUseGPT5() {
+    const env = process.env.NODE_ENV || 'development';
+    const percentage = this.trafficPercentage[env];
+    return Math.random() * 100 < percentage;
+  }
+};
+
+module.exports = RolloutConfig;
