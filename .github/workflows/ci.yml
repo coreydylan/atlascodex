@@ -109,7 +109,10 @@ jobs:
         serverless --version
       
     - name: Deploy to development
-      run: npm run deploy:dev
+      run: |
+        which serverless
+        serverless --version
+        serverless deploy --stage dev
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
@@ -151,7 +154,10 @@ jobs:
         serverless --version
       
     - name: Deploy to staging
-      run: npm run deploy:staging
+      run: |
+        which serverless
+        serverless --version
+        serverless deploy --stage staging
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
@@ -193,6 +199,9 @@ jobs:
         serverless --version
       
     - name: Deploy to production
-      run: npm run deploy:prod
+      run: |
+        which serverless
+        serverless --version
+        serverless deploy --stage production
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
