@@ -1,6 +1,9 @@
 // tests/setup.js - Jest test setup configuration
 require('dotenv').config();
 
+// Mock OpenAI for testing
+jest.mock('openai');
+
 // Set test environment variables
 process.env.NODE_ENV = 'test';
 process.env.GPT5_ENABLED = 'true';

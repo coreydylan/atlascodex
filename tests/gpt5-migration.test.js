@@ -1,6 +1,6 @@
 // tests/gpt5-migration.test.js
-const AIProcessorV2 = require('../api/ai-processor-v2');
-const EvidenceFirstBridgeV2 = require('../api/evidence-first-bridge-v2');
+const { AIProcessorV2 } = require('../api/ai-processor-v2');
+const { EvidenceFirstBridgeV2 } = require('../api/evidence-first-bridge-v2');
 const ModelSelector = require('../api/services/model-selector');
 
 describe('GPT-5 Migration Tests', () => {
