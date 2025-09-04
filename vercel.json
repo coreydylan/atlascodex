@@ -10,21 +10,21 @@
       "production": true
     }
   },
-  "buildCommand": "echo 'Using root index.html'",
-  "outputDirectory": ".",
-  "framework": null,
-  "installCommand": "echo 'No install needed for static site'",
-  "devCommand": "python3 -m http.server 8000",
+  "buildCommand": "cd packages/frontend && npm install && npm run build",
+  "outputDirectory": "packages/frontend/dist",
+  "framework": "vite",
+  "installCommand": "cd packages/frontend && npm install",
+  "devCommand": "cd packages/frontend && npm run dev",
   "env": {
-    "VITE_API_URL": "@api_url",
-    "VITE_API_KEY": "@api_key",
-    "VITE_ENVIRONMENT": "@environment"
+    "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/prod",
+    "VITE_API_KEY": "prod-28d4434781ec4cef8b68b00a8e84a6f49d133aab1e605504604a088e33ac97f2",
+    "ENVIRONMENT": "production"
   },
   "build": {
     "env": {
-      "VITE_API_URL": "@api_url",
-      "VITE_API_KEY": "@api_key", 
-      "VITE_ENVIRONMENT": "@environment"
+      "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/prod",
+      "VITE_API_KEY": "prod-28d4434781ec4cef8b68b00a8e84a6f49d133aab1e605504604a088e33ac97f2",
+      "ENVIRONMENT": "production"
     }
   },
   "headers": [
