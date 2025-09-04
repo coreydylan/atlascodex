@@ -60,7 +60,7 @@ app.post('/api/extract', async (req, res) => {
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
       .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
       .replace(/<!--.*?-->/gs, '')
-      .substring(0, 60000); // Token limit optimization
+      .substring(0, 150000); // Increased limit to capture article content
     
     // Use GPT-5-mini for extraction
     console.log('🤖 Calling GPT-5-mini...');
@@ -69,17 +69,45 @@ app.post('/api/extract', async (req, res) => {
       messages: [
         {
           role: 'system',
-          content: 'You are a precise data extraction system. Extract the requested information and return it as clean JSON.'
+          content: `You are a unified data extraction and schema generation system. Your task is to:
+1. ANALYZE the user's extraction request to understand what type of items they want
+2. IDENTIFY repeating structural patterns in the HTML that match the user's request
+3. GENERATE an appropriate JSON Schema for the requested data type
+4. EXTRACT ALL instances of the identified pattern from the HTML content
+
+CRITICAL INSTRUCTIONS FOR COMPLETE EXTRACTION:
+1. ANALYZE THE HTML STRUCTURE: Look for repeating patterns, containers, or sections
+2. IDENTIFY ALL INSTANCES: Count how many items of the requested type exist
+3. EXTRACT EVERYTHING: Do not stop at the first few items
+4. PATTERN RECOGNITION: Look for common HTML patterns like:
+   - Repeated div containers with similar class names
+   - List items (li) containing the data
+   - Card/profile sections
+   - Table rows
+   - Any repeating content sections
+
+EXTRACTION RULES:
+1. Focus on the main content the user is requesting, not navigation or UI chrome
+2. Distinguish between structural/navigational elements and actual content
+3. Extract ALL instances of the requested pattern, not just the first few
+4. Preserve the structure and relationships in the data
+5. Include all available fields for each item
+6. Return clean, well-structured JSON
+
+QUALITY CHECK:
+Before returning, verify:
+- Have you extracted ALL instances, not just the first few?
+- Are these the actual content items the user requested, not peripheral UI elements?
+- Does your output match the user's specific request?`
         },
         {
           role: 'user',
-          content: `Extract the following from this webpage:
-${extractionInstructions}
+          content: `USER REQUEST: ${extractionInstructions}
 
-HTML Content:
+HTML CONTENT:
 ${cleanedHtml}
 
-Return the extracted data as JSON.`
+Extract the requested data and return as JSON.`
         }
       ],
       max_completion_tokens: 4000,
@@ -277,7 +305,7 @@ app.post('/api/ai/process', async (req, res) => {
         .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
         .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
         .replace(/<!--.*?-->/gs, '')
-        .substring(0, 60000); // Token limit optimization
+        .substring(0, 150000); // Increased limit to capture article content
       
       // Use GPT-5-mini for extraction
       const extractionCompletion = await openai.chat.completions.create({
@@ -285,17 +313,45 @@ app.post('/api/ai/process', async (req, res) => {
         messages: [
           {
             role: 'system',
-            content: 'You are a precise data extraction system. Extract the requested information and return it as clean JSON.'
+            content: `You are a unified data extraction and schema generation system. Your task is to:
+1. ANALYZE the user's extraction request to understand what type of items they want
+2. IDENTIFY repeating structural patterns in the HTML that match the user's request
+3. GENERATE an appropriate JSON Schema for the requested data type
+4. EXTRACT ALL instances of the identified pattern from the HTML content
+
+CRITICAL INSTRUCTIONS FOR COMPLETE EXTRACTION:
+1. ANALYZE THE HTML STRUCTURE: Look for repeating patterns, containers, or sections
+2. IDENTIFY ALL INSTANCES: Count how many items of the requested type exist
+3. EXTRACT EVERYTHING: Do not stop at the first few items
+4. PATTERN RECOGNITION: Look for common HTML patterns like:
+   - Repeated div containers with similar class names
+   - List items (li) containing the data
+   - Card/profile sections
+   - Table rows
+   - Any repeating content sections
+
+EXTRACTION RULES:
+1. Focus on the main content the user is requesting, not navigation or UI chrome
+2. Distinguish between structural/navigational elements and actual content
+3. Extract ALL instances of the requested pattern, not just the first few
+4. Preserve the structure and relationships in the data
+5. Include all available fields for each item
+6. Return clean, well-structured JSON
+
+QUALITY CHECK:
+Before returning, verify:
+- Have you extracted ALL instances, not just the first few?
+- Are these the actual content items the user requested, not peripheral UI elements?
+- Does your output match the user's specific request?`
           },
           {
             role: 'user',
-            content: `Extract the following from this webpage:
-${parsed.extractionInstructions}
+            content: `USER REQUEST: ${parsed.extractionInstructions}
 
-HTML Content:
+HTML CONTENT:
 ${cleanedHtml}
 
-Return the extracted data as JSON.`
+Extract the requested data and return as JSON.`
           }
         ],
         max_completion_tokens: 4000,
