@@ -1,9 +1,35 @@
-// Atlas Codex API Lambda Handler
+// Atlas Codex API Lambda Handler with GPT-5 Support
 const { DynamoDBClient, PutItemCommand, GetItemCommand, ScanCommand } = require('@aws-sdk/client-dynamodb');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
-const { processNaturalLanguage } = require('./atlas-generator-integration');
+const RolloutConfig = require('../config/gpt5-rollout');
+
+// GPT-5 Migration: Conditional imports based on rollout
+let processNaturalLanguage;
+let processWithUnifiedExtractor;
+
+if (RolloutConfig.shouldUseGPT5()) {
+  console.log('🚀 GPT-5 ACTIVE: Loading V2 implementations');
+  const { AIProcessorV2 } = require('./ai-processor-v2');
+  const { EvidenceFirstBridgeV2 } = require('./evidence-first-bridge-v2');
+  
+  // Create wrapper functions for V2 implementations
+  const aiProcessor = new AIProcessorV2();
+  const evidenceBridge = new EvidenceFirstBridgeV2();
+  
+  processNaturalLanguage = async (input, options) => {
+    return await aiProcessor.processNaturalLanguage(input, options);
+  };
+  
+  processWithUnifiedExtractor = async (html, params) => {
+    return await evidenceBridge.processWithEvidenceFirst(html, params);
+  };
+} else {
+  console.log('📦 GPT-4 ACTIVE: Loading legacy implementations');
+  processNaturalLanguage = require('./atlas-generator-integration').processNaturalLanguage;
+  processWithUnifiedExtractor = require('./evidence-first-bridge').processWithUnifiedExtractor;
+}
+
 const { processWithPlanBasedSystem } = require('./worker-enhanced');
-const { processWithUnifiedExtractor } = require('./evidence-first-bridge');
 
 const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const sqs = new SQSClient({ region: process.env.AWS_REGION || 'us-west-2' });
@@ -98,7 +124,7 @@ function cleanExtractionResult(result) {
 // CORS headers
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type,X-Api-Key,Authorization,x-api-key',
+  'Access-Control-Allow-Headers': 'Content-Type,X-Api-Key,Authorization,x-api-key,X-Amz-Date,X-Amz-Security-Token,X-Amz-User-Agent,X-Amzn-Trace-Id',
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
   'Access-Control-Max-Age': '86400'
 };
@@ -386,7 +412,11 @@ exports.handler = async (event) => {
           OPENAI_API_KEY_present: !!process.env.OPENAI_API_KEY,
           OPENAI_API_KEY_length: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0,
           OPENAI_API_KEY_prefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 10) : null,
-          all_env_keys: Object.keys(process.env).filter(k => k.includes('OPENAI') || k.includes('UNIFIED')),
+          GPT5_ENABLED: process.env.GPT5_ENABLED,
+          GPT5_MODEL_SELECTION: process.env.GPT5_MODEL_SELECTION,
+          GPT5_FALLBACK_ENABLED: process.env.GPT5_FALLBACK_ENABLED,
+          GPT5_REASONING_ENABLED: process.env.GPT5_REASONING_ENABLED,
+          all_env_keys: Object.keys(process.env).filter(k => k.includes('OPENAI') || k.includes('UNIFIED') || k.includes('GPT5')),
           lambda_region: process.env.AWS_REGION,
           lambda_function_name: process.env.AWS_LAMBDA_FUNCTION_NAME
         }
