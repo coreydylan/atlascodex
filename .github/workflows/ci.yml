@@ -101,6 +101,9 @@ jobs:
     - name: Bootstrap packages
       run: npm run bootstrap
       
+    - name: Install Serverless v3
+      run: npm install -g serverless@3
+      
     - name: Deploy to development
       run: npm run deploy:dev
       env:
@@ -136,6 +139,9 @@ jobs:
     - name: Bootstrap packages
       run: npm run bootstrap
       
+    - name: Install Serverless v3
+      run: npm install -g serverless@3
+      
     - name: Deploy to staging
       run: npm run deploy:staging
       env:
@@ -170,6 +176,9 @@ jobs:
       
     - name: Bootstrap packages
       run: npm run bootstrap
+      
+    - name: Install Serverless v3
+      run: npm install -g serverless@3
       
     - name: Deploy to production
       run: npm run deploy:prod
