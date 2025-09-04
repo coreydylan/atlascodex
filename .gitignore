@@ -76,3 +76,4 @@ lambda-*.zip
 # Archives
 atlas-codex-stable-*.tar.gz
 CHECKSUMS.txt
+.vercel
