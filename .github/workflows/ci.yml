@@ -102,7 +102,11 @@ jobs:
       run: npm run bootstrap
       
     - name: Install Serverless v3
-      run: npm install -g serverless@3
+      run: |
+        npm uninstall -g serverless || true
+        npm install -g serverless@3
+        which serverless
+        serverless --version
       
     - name: Deploy to development
       run: npm run deploy:dev
@@ -140,7 +144,11 @@ jobs:
       run: npm run bootstrap
       
     - name: Install Serverless v3
-      run: npm install -g serverless@3
+      run: |
+        npm uninstall -g serverless || true
+        npm install -g serverless@3
+        which serverless
+        serverless --version
       
     - name: Deploy to staging
       run: npm run deploy:staging
@@ -178,7 +186,11 @@ jobs:
       run: npm run bootstrap
       
     - name: Install Serverless v3
-      run: npm install -g serverless@3
+      run: |
+        npm uninstall -g serverless || true
+        npm install -g serverless@3
+        which serverless
+        serverless --version
       
     - name: Deploy to production
       run: npm run deploy:prod
