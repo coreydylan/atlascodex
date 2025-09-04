@@ -1,5 +1,6 @@
 # Simplified Serverless config for Atlas Codex
 service: atlas-codex
+frameworkVersion: '3'
 
 provider:
   name: aws
