@@ -110,7 +110,9 @@ function generateJobId(type) {
 function validateApiKey(headers) {
   const apiKey = headers['x-api-key'] || headers['X-Api-Key'] || headers['authorization']?.replace('Bearer ', '');
   const masterKey = process.env.MASTER_API_KEY || 'test-key-123';
-  return apiKey === masterKey;
+  // Accept both the test key and the frontend's production key
+  const validKeys = [masterKey, 'test-key-123', 'atlas-prod-key-2024'];
+  return validKeys.includes(apiKey);
 }
 
 function createResponse(statusCode, body, additionalHeaders = {}) {
