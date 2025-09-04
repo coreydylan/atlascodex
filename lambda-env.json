@@ -1,8 +1,0 @@
-{
-  "Variables": {
-    "NODE_ENV": "development",
-    "MASTER_API_KEY": "test-key-123",
-    "OPENAI_API_KEY": "your-openai-api-key-here",
-    "UNIFIED_EXTRACTOR_ENABLED": "true"
-  }
-}

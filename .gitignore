@@ -1,36 +1,18 @@
 # Dependencies
 node_modules/
-*/node_modules/
 packages/*/node_modules/
 
-# Environment variables
+# Environment files
 .env
 .env.*
 !.env.example
-!.env.test
 
 # Build outputs
 dist/
 build/
-*.js.map
-*.d.ts
-!packages/*/src/**/*.d.ts
-.next/
-out/
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-lerna-debug.log*
-
-# Testing
-coverage/
-.nyc_output/
-junit.xml
-test-results/
+.serverless/
+*.zip
+*.tar.gz
 
 # IDE
 .vscode/
@@ -38,37 +20,59 @@ test-results/
 *.swp
 *.swo
 *~
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# Backups
+*.backup
+*.bak
+*.tmp
+*.old
 
 # AWS
-.aws-sam/
-.serverless/
-*.zip
-
-# Docker
-docker-compose.override.yml
+.aws/
+lambda-env.json
 
 # Terraform
 *.tfstate
 *.tfstate.*
 .terraform/
-.terraform.lock.hcl
-terraform.tfvars
-!terraform.tfvars.example
+terraform.tfstate.d/
+tfplan
 
-# Cache
-.cache/
-.parcel-cache/
-.turbo/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+ENV/
 
-# Temporary files
-tmp/
-temp/
-*.tmp
+# Deployment artifacts
+worker-*.zip
+worker-*.tar.gz
+lambda-*.zip
 
-# Local development
-localstack/
-.localstack/
+# Local files
+*.pem
+*.key
+*.cert
 
-# Deployment
-.vercel
+# Vercel
+.vercel/
+
+# Archives
+atlas-codex-stable-*.tar.gz
+CHECKSUMS.txt
