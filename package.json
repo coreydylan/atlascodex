@@ -4,7 +4,9 @@
   "description": "Drop-in Hyperbrowser replacement with GPT-5 intelligence",
   "scripts": {
     "build": "echo 'Build completed'",
-    "test": "echo 'No tests specified'",
+    "test": "jest",
+    "test:gpt5": "jest tests/gpt5-migration.test.js",
+    "test:gpt5:watch": "jest tests/gpt5-migration.test.js --watch",
     "start": "node index.html",
     "deploy:dev": "serverless deploy --stage dev",
     "deploy:staging": "serverless deploy --stage staging",
@@ -50,6 +52,7 @@
   "devDependencies": {
     "@types/node": "^20.10.5",
     "concurrently": "^8.2.2",
+    "jest": "^29.7.0",
     "node-fetch": "^3.3.2",
     "nodemon": "^3.0.2",
     "serverless-offline": "^14.4.0",
@@ -58,5 +61,15 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"],
+    "collectCoverageFrom": [
+      "api/**/*.js",
+      "!api/**/*.test.js",
+      "!node_modules/**"
+    ],
+    "setupFilesAfterEnv": ["<rootDir>/tests/setup.js"]
   }
 }
