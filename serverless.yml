@@ -10,6 +10,7 @@ provider:
     NODE_ENV: ${self:custom.stage.${self:provider.stage}.NODE_ENV, 'production'}
     MASTER_API_KEY: ${env:MASTER_API_KEY, 'test-key-123'}
     OPENAI_API_KEY: ${env:OPENAI_API_KEY, ''}
+    UNIFIED_EXTRACTOR_ENABLED: ${env:UNIFIED_EXTRACTOR_ENABLED, 'false'}
     QUEUE_URL: 
       Ref: JobQueue
 
@@ -79,6 +80,7 @@ functions:
         - 'api/atlas-generator-integration.js'
         - 'api/ai-processor.js'
         - 'api/worker-enhanced.js'  # Include our improved extraction system
+        - 'api/evidence-first-bridge.js'  # Include unified extractor
         - 'node_modules/**'
     events:
       - http:

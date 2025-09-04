@@ -158,6 +158,7 @@ function App() {
   const [showResult, setShowResult] = useState(false);
   const [aiMode, setAiMode] = useState(false);
   const [aiProcessing, setAiProcessing] = useState(false);
+  const [useUnifiedExtractor, setUseUnifiedExtractor] = useState(false);
   
   // Options state - always visible
   const [includeHtml, setIncludeHtml] = useState(true);
@@ -228,7 +229,8 @@ function App() {
           },
           body: JSON.stringify({
             prompt: url,
-            autoExecute: true
+            autoExecute: true,
+            UNIFIED_EXTRACTOR_ENABLED: useUnifiedExtractor
           })
         });
         
@@ -308,7 +310,8 @@ function App() {
             },
             body: JSON.stringify({
               prompt: fullUrl,
-              autoExecute: false // Get the structured params but don't auto-execute
+              autoExecute: false, // Get the structured params but don't auto-execute
+              UNIFIED_EXTRACTOR_ENABLED: useUnifiedExtractor
             }),
           });
           
@@ -373,6 +376,7 @@ function App() {
         strategy: 'auto', // Let Evidence-First system choose the best strategy
         type: mode,
         useEvidenceFirst: true, // Enable evidence-first processing
+        UNIFIED_EXTRACTOR_ENABLED: useUnifiedExtractor, // Add unified extractor flag
         ...extractedParams // This now includes extractionInstructions, outputSchema, postProcessing from AI
       };
       
@@ -953,18 +957,49 @@ Examples:
                           </div>
                         </div>
                         
-                        {/* Template System Badge */}
-                        {activeJob.result?.templateEnhanced && (
+                        {/* Processing Method Badge */}
+                        {activeJob.result?.metadata?.processingMethod && (
                           <div className="mb-3">
-                            <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-lg p-3">
-                              <div className="flex items-center gap-2 mb-1">
-                                <Sparkles className="w-4 h-4 text-purple-600" />
-                                <span className="text-sm font-semibold text-purple-900">Template-Enhanced Extraction</span>
+                            {activeJob.result.metadata.processingMethod === 'unified_extractor_option_c' ? (
+                              <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <CheckCircle className="w-4 h-4 text-green-600" />
+                                  <span className="text-sm font-semibold text-green-900">Unified Extractor (Option C)</span>
+                                </div>
+                                <p className="text-xs text-green-700">
+                                  Used AI-powered unified extraction with strict AJV validation
+                                  {activeJob.result.metadata.validation?.phantomFieldsRemoved > 0 && (
+                                    <span> • Removed {activeJob.result.metadata.validation.phantomFieldsRemoved} phantom fields</span>
+                                  )}
+                                </p>
                               </div>
-                              <p className="text-xs text-purple-700">
-                                Used intelligent template matching for {activeJob.result.metadata?.templateId || 'optimized'} extraction pattern
-                              </p>
-                            </div>
+                            ) : activeJob.result.metadata.processingMethod.includes('plan_based') ? (
+                              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <Sparkles className="w-4 h-4 text-blue-600" />
+                                  <span className="text-sm font-semibold text-blue-900">Plan-Based Extraction</span>
+                                  {activeJob.result.metadata.fallbackUsed && (
+                                    <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full ml-2">Fallback</span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-blue-700">
+                                  Used traditional plan-based extraction system
+                                  {activeJob.result.metadata.fallbackReason && (
+                                    <span> • Fallback reason: {activeJob.result.metadata.fallbackReason}</span>
+                                  )}
+                                </p>
+                              </div>
+                            ) : activeJob.result?.templateEnhanced ? (
+                              <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <Sparkles className="w-4 h-4 text-purple-600" />
+                                  <span className="text-sm font-semibold text-purple-900">Template-Enhanced Extraction</span>
+                                </div>
+                                <p className="text-xs text-purple-700">
+                                  Used intelligent template matching for {activeJob.result.metadata?.templateId || 'optimized'} extraction pattern
+                                </p>
+                              </div>
+                            ) : null}
                           </div>
                         )}
                         
@@ -974,8 +1009,17 @@ Examples:
                             <h4 className="font-medium text-gray-900 mb-2">📊 Extraction Info</h4>
                             <div className="bg-blue-50 rounded-lg p-3 text-sm">
                               <div className="grid grid-cols-2 gap-2 text-xs">
+                                {activeJob.result.metadata.processingTime && (
+                                  <div><span className="text-gray-600">Duration:</span> {activeJob.result.metadata.processingTime}ms</div>
+                                )}
                                 {activeJob.result.metadata.duration && (
                                   <div><span className="text-gray-600">Duration:</span> {activeJob.result.metadata.duration}ms</div>
+                                )}
+                                {activeJob.result.metadata.processingMethod && (
+                                  <div><span className="text-gray-600">Method:</span> {activeJob.result.metadata.processingMethod.replace(/unified_extractor_option_c/, 'Unified Extractor').replace(/plan_based/, 'Plan-Based')}</div>
+                                )}
+                                {activeJob.result.metadata.unifiedExtractor !== undefined && (
+                                  <div><span className="text-gray-600">Unified:</span> {activeJob.result.metadata.unifiedExtractor ? 'Yes' : 'No'}</div>
                                 )}
                                 {activeJob.result.metadata.cost && (
                                   <div><span className="text-gray-600">Cost:</span> ${activeJob.result.metadata.cost.toFixed(4)}</div>
@@ -985,6 +1029,9 @@ Examples:
                                 )}
                                 {activeJob.result.metadata.itemsExtracted && (
                                   <div><span className="text-gray-600">Items Found:</span> {activeJob.result.metadata.itemsExtracted}</div>
+                                )}
+                                {activeJob.result.metadata.validation?.originalDataLength && (
+                                  <div><span className="text-gray-600">Items Found:</span> {activeJob.result.metadata.validation.originalDataLength}</div>
                                 )}
                                 {activeJob.result.metadata.source && (
                                   <div><span className="text-gray-600">Source:</span> {activeJob.result.metadata.source}</div>
@@ -1011,6 +1058,38 @@ Examples:
                   <CardTitle className="text-lg">Options</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  {/* Unified Extractor Option - Available in all modes */}
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="unified-extractor" className="text-sm font-medium">
+                      {aiMode ? 'AI-Powered Unified Extraction' : 'Use Unified Extractor (Option C)'}
+                    </Label>
+                    <Switch
+                      id="unified-extractor"
+                      checked={useUnifiedExtractor}
+                      onCheckedChange={setUseUnifiedExtractor}
+                    />
+                  </div>
+                  {useUnifiedExtractor && (
+                    <div className={aiMode ? 
+                      "bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-lg p-3" :
+                      "bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg p-3"
+                    }>
+                      <div className="flex items-center gap-2 mb-1">
+                        {aiMode ? <Sparkles className="w-4 h-4 text-purple-600" /> : <CheckCircle className="w-4 h-4 text-green-600" />}
+                        <span className={aiMode ? "text-xs font-semibold text-purple-900" : "text-xs font-semibold text-green-900"}>
+                          {aiMode ? 'AI-Powered Unified Extraction' : 'Unified Extractor Enabled'}
+                        </span>
+                        <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full">Experimental</span>
+                      </div>
+                      <p className={aiMode ? "text-xs text-purple-700" : "text-xs text-green-700"}>
+                        {aiMode ? 
+                          'AI will intelligently analyze your request and use unified extraction for optimal results.' :
+                          'AI-powered unified extraction with strict AJV validation. Clean fallback to plan-based system if needed.'
+                        }
+                      </p>
+                    </div>
+                  )}
+                  <div className="border-t pt-4" />
                   {mode === 'scrape' && (
                     <>
                       <div className="flex items-center justify-between">
@@ -1193,11 +1272,16 @@ Examples:
                 </CardHeader>
                 <CardContent>
                   <div className="bg-gray-900 text-gray-100 rounded-lg p-3 text-xs font-mono">
-                    <div className="text-green-400"># {config.label} API</div>
+                    <div className="text-green-400"># {aiMode && useUnifiedExtractor ? 'AI-Powered Unified Extraction API' : config.label + ' API' + (useUnifiedExtractor ? ' (Unified Extractor)' : '')}</div>
                     <div className="text-blue-400">curl</div> -X POST \<br />
-                    &nbsp;&nbsp;{API_BASE}/{mode} \<br />
+                    &nbsp;&nbsp;{API_BASE}/api/extract \<br />
                     &nbsp;&nbsp;-H <span className="text-yellow-300">"x-api-key: YOUR_KEY"</span> \<br />
-                    &nbsp;&nbsp;-d '{JSON.stringify({ url: url || 'example.com', format }, null, 2)}'
+                    &nbsp;&nbsp;-d '{JSON.stringify({ 
+                      url: url || 'example.com', 
+                      type: mode, 
+                      format,
+                      ...(useUnifiedExtractor && { UNIFIED_EXTRACTOR_ENABLED: true })
+                    }, null, 2)}'
                   </div>
                   <Button variant="outline" size="sm" className="mt-3 w-full">
                     <Copy className="w-4 h-4 mr-1" />

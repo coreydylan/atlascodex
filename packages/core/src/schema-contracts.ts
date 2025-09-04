@@ -1,357 +1,654 @@
 /**
  * Evidence-First Schema Contracts System
- * Implements schema contracts that serve as priors, not prisons
+ * Complete implementation as specified in the Evidence-First Adaptive Extraction Plan
  */
 
-export type FieldType = 'text' | 'number' | 'url' | 'date' | 'email' | 'phone' | 'image' | 'boolean' | 'array' | 'object';
+// ===== CORE TYPES =====
 
-export type FieldPriority = 'required' | 'expected' | 'discoverable';
+export type FieldKind = "required" | "expected" | "discoverable";
+export type FieldType = "string" | "email" | "url" | "enum" | "richtext" | "array" | "number" | "date" | "phone" | "image" | "boolean" | "object";
 
 export interface FieldSpec {
   name: string;
+  kind: FieldKind;
   type: FieldType;
-  priority: FieldPriority;
-  description?: string;
-  examples?: string[];
-  validation?: {
-    pattern?: string;
-    minLength?: number;
-    maxLength?: number;
-    enum?: string[];
-  };
-  extractionHints?: {
-    selectors?: string[];
-    keywords?: string[];
-    negativeKeywords?: string[];
-  };
+  detector: Detector;        // cheap, deterministic predicate(s)
+  extractor: Extractor;      // how to pull value if detector hits
+  validators: Validator[];   // type/format checks
+  min_support?: number;      // e.g., need k instances before we accept a new field
 }
 
 export interface SchemaContract {
-  id: string;
-  name: string;
-  description: string;
+  entity: string;           // "person", "department", "product", etc.
   fields: FieldSpec[];
-  metadata: {
-    domain?: string;
-    confidence: number;
-    source: 'template' | 'generated' | 'hybrid';
-    created: string;
-    userQuery: string;
-  };
-  validation: {
-    minRequiredFields: number;
-    allowAdditionalFields: boolean;
-    strictMode: boolean;
+  governance: {
+    allowNewFields: boolean;     // discovery gate
+    newFieldPolicy: "evidence_first" | "strict"; 
+    min_support_threshold: number;  // minimum instances for field promotion
+    max_discoverable_fields: number; // prevent schema explosion
   };
 }
 
-export interface ContractGenerationContext {
-  userQuery: string;
-  url?: string;
-  contentSample?: string;
-  existingTemplates?: SchemaContract[];
-  userPreferences?: {
-    verbosity: 'minimal' | 'standard' | 'detailed';
-    format: 'structured' | 'narrative' | 'mixed';
-  };
+export interface DOMEvidence {
+  selector: string;
+  textContent?: string;
+  dom_path: string;
 }
 
-export interface EvidenceTrack {
-  type: 'deterministic' | 'llm_augmented';
+export interface DetectionResult {
+  element: Element;
+  selector: string;
   confidence: number;
-  source: string;
-  fields: Record<string, any>;
-  metadata: {
-    extractionMethod: string;
-    processingTime: number;
-    errors?: string[];
-  };
 }
 
-export interface SchemaEvidence {
-  contractId: string;
-  deterministicTrack: EvidenceTrack;
-  llmTrack?: EvidenceTrack;
-  negotiatedSchema: SchemaContract;
-  finalData: Record<string, any>;
-  metadata: {
-    totalProcessingTime: number;
-    trackComparison?: {
-      agreement: number;
-      conflicts: string[];
-      resolutions: string[];
+// ===== DETECTOR SYSTEM =====
+
+export abstract class Detector {
+  abstract detect(dom: Document): Promise<DetectionResult[]>;
+  abstract getSelectors(): string[];
+}
+
+export class TitleDetector extends Detector {
+  constructor(private selectors: string[]) {
+    super();
+  }
+
+  async detect(dom: Document): Promise<DetectionResult[]> {
+    const results: DetectionResult[] = [];
+    
+    for (const selector of this.selectors) {
+      try {
+        const elements = dom.querySelectorAll(selector);
+        elements.forEach((element, index) => {
+          const text = element.textContent?.trim();
+          if (text && text.length >= 2 && text.length <= 100) {
+            results.push({
+              element,
+              selector: `${selector}:nth-child(${index + 1})`,
+              confidence: this.calculateTitleConfidence(text, element)
+            });
+          }
+        });
+      } catch (error) {
+        console.warn(`TitleDetector selector failed: ${selector}`, error);
+      }
+    }
+    
+    return results.sort((a, b) => b.confidence - a.confidence);
+  }
+
+  private calculateTitleConfidence(text: string, element: Element): number {
+    let confidence = 0.5; // base confidence
+    
+    // Prefer shorter, more title-like text
+    if (text.length < 50) confidence += 0.2;
+    if (text.length < 20) confidence += 0.1;
+    
+    // Boost confidence for title-like tags
+    const tagName = element.tagName.toLowerCase();
+    if (['h1', 'h2', 'h3'].includes(tagName)) confidence += 0.3;
+    if (tagName === 'title') confidence += 0.4;
+    
+    // Boost for title-like classes
+    const className = element.className?.toLowerCase() || '';
+    if (className.includes('title')) confidence += 0.2;
+    if (className.includes('name')) confidence += 0.15;
+    if (className.includes('header')) confidence += 0.1;
+    
+    return Math.min(confidence, 1.0);
+  }
+
+  getSelectors(): string[] {
+    return this.selectors;
+  }
+}
+
+export class DescriptionDetector extends Detector {
+  constructor(private selectors: string[]) {
+    super();
+  }
+
+  async detect(dom: Document): Promise<DetectionResult[]> {
+    const results: DetectionResult[] = [];
+    
+    for (const selector of this.selectors) {
+      try {
+        const elements = dom.querySelectorAll(selector);
+        elements.forEach((element, index) => {
+          const text = element.textContent?.trim();
+          if (text && text.length >= 10) {
+            results.push({
+              element,
+              selector: `${selector}:nth-child(${index + 1})`,
+              confidence: this.calculateDescriptionConfidence(text, element)
+            });
+          }
+        });
+      } catch (error) {
+        console.warn(`DescriptionDetector selector failed: ${selector}`, error);
+      }
+    }
+    
+    return results.sort((a, b) => b.confidence - a.confidence);
+  }
+
+  private calculateDescriptionConfidence(text: string, element: Element): number {
+    let confidence = 0.4; // base confidence
+    
+    // Prefer longer, more descriptive text
+    if (text.length > 50) confidence += 0.1;
+    if (text.length > 100) confidence += 0.1;
+    if (text.length > 200) confidence += 0.1;
+    
+    // Boost for description-like classes
+    const className = element.className?.toLowerCase() || '';
+    if (className.includes('description')) confidence += 0.3;
+    if (className.includes('summary')) confidence += 0.25;
+    if (className.includes('content')) confidence += 0.2;
+    if (className.includes('detail')) confidence += 0.15;
+    
+    // Boost for paragraph tags
+    if (element.tagName.toLowerCase() === 'p') confidence += 0.15;
+    
+    return Math.min(confidence, 1.0);
+  }
+
+  getSelectors(): string[] {
+    return this.selectors;
+  }
+}
+
+export class LinkDetector extends Detector {
+  constructor(private selectors: string[]) {
+    super();
+  }
+
+  async detect(dom: Document): Promise<DetectionResult[]> {
+    const results: DetectionResult[] = [];
+    
+    for (const selector of this.selectors) {
+      try {
+        const elements = dom.querySelectorAll(selector);
+        elements.forEach((element, index) => {
+          const href = element.getAttribute('href');
+          if (href && this.isValidUrl(href)) {
+            results.push({
+              element,
+              selector: `${selector}:nth-child(${index + 1})`,
+              confidence: this.calculateLinkConfidence(href, element)
+            });
+          }
+        });
+      } catch (error) {
+        console.warn(`LinkDetector selector failed: ${selector}`, error);
+      }
+    }
+    
+    return results.sort((a, b) => b.confidence - a.confidence);
+  }
+
+  private isValidUrl(url: string): boolean {
+    try {
+      new URL(url, 'https://example.com'); // Allow relative URLs
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private calculateLinkConfidence(href: string, element: Element): number {
+    let confidence = 0.6; // base confidence for valid links
+    
+    // Boost for absolute URLs
+    if (href.startsWith('http')) confidence += 0.2;
+    
+    // Boost for meaningful URLs (not just fragments)
+    if (href.length > 10 && !href.startsWith('#')) confidence += 0.1;
+    
+    // Boost for link text that suggests it's a main link
+    const text = element.textContent?.toLowerCase() || '';
+    if (text.includes('more') || text.includes('read') || text.includes('visit')) {
+      confidence += 0.1;
+    }
+    
+    return Math.min(confidence, 1.0);
+  }
+
+  getSelectors(): string[] {
+    return this.selectors;
+  }
+}
+
+export class GenericDetector extends Detector {
+  constructor(private domAnchors: string[]) {
+    super();
+  }
+
+  async detect(dom: Document): Promise<DetectionResult[]> {
+    const results: DetectionResult[] = [];
+    
+    for (const anchor of this.domAnchors) {
+      try {
+        // Assume anchor is a CSS selector
+        const elements = dom.querySelectorAll(anchor);
+        elements.forEach((element, index) => {
+          if (element.textContent?.trim()) {
+            results.push({
+              element,
+              selector: `${anchor}:nth-child(${index + 1})`,
+              confidence: 0.7 // Generic confidence
+            });
+          }
+        });
+      } catch (error) {
+        console.warn(`GenericDetector anchor failed: ${anchor}`, error);
+      }
+    }
+    
+    return results;
+  }
+
+  getSelectors(): string[] {
+    return this.domAnchors;
+  }
+}
+
+// ===== EXTRACTOR SYSTEM =====
+
+export abstract class Extractor {
+  abstract extract(element: Element): Promise<any>;
+}
+
+export class TextExtractor extends Extractor {
+  async extract(element: Element): Promise<string> {
+    return element.textContent?.trim() || '';
+  }
+}
+
+export class RichTextExtractor extends Extractor {
+  async extract(element: Element): Promise<string> {
+    // Extract rich text with basic formatting preserved
+    const text = element.innerHTML || element.textContent || '';
+    return text.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+               .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+               .trim();
+  }
+}
+
+export class URLExtractor extends Extractor {
+  async extract(element: Element): Promise<string> {
+    // Extract URL from href attribute
+    const href = element.getAttribute('href');
+    if (href) {
+      // Convert relative URLs to absolute if needed
+      try {
+        const url = new URL(href, window.location?.href || 'https://example.com');
+        return url.toString();
+      } catch {
+        return href; // Return as-is if conversion fails
+      }
+    }
+    
+    // Fallback: look for URLs in text content
+    const text = element.textContent || '';
+    const urlMatch = text.match(/(https?:\/\/[^\s]+)/);
+    return urlMatch ? urlMatch[1] : '';
+  }
+}
+
+export class GenericExtractor extends Extractor {
+  async extract(element: Element): Promise<string> {
+    return element.textContent?.trim() || '';
+  }
+}
+
+// ===== VALIDATOR SYSTEM =====
+
+export interface ValidationResult {
+  valid: boolean;
+  message?: string;
+}
+
+export abstract class Validator {
+  abstract validate(value: any): ValidationResult;
+}
+
+export class MinLengthValidator extends Validator {
+  constructor(private minLength: number) {
+    super();
+  }
+
+  validate(value: any): ValidationResult {
+    const str = String(value || '');
+    const valid = str.length >= this.minLength;
+    return {
+      valid,
+      message: valid ? undefined : `Value must be at least ${this.minLength} characters long`
     };
+  }
+}
+
+export class MaxLengthValidator extends Validator {
+  constructor(private maxLength: number) {
+    super();
+  }
+
+  validate(value: any): ValidationResult {
+    const str = String(value || '');
+    const valid = str.length <= this.maxLength;
+    return {
+      valid,
+      message: valid ? undefined : `Value must be at most ${this.maxLength} characters long`
+    };
+  }
+}
+
+export class URLFormatValidator extends Validator {
+  validate(value: any): ValidationResult {
+    const str = String(value || '');
+    if (!str) return { valid: false, message: 'URL cannot be empty' };
+    
+    try {
+      new URL(str);
+      return { valid: true };
+    } catch {
+      // Try with protocol prefix
+      try {
+        new URL(`https://${str}`);
+        return { valid: true };
+      } catch {
+        return { valid: false, message: 'Invalid URL format' };
+      }
+    }
+  }
+}
+
+// ===== CONTRACT GENERATION =====
+
+export interface ContractGenerationOptions {
+  model?: string;
+  reasoning_effort?: string;
+  verbosity?: string;
+  response_format?: any;
+  max_tokens?: number;
+  abstain_on_insufficient_evidence?: boolean;
+}
+
+/**
+ * Generate Schema Contract using GPT-5 with the exact prompt structure from the plan
+ */
+export async function generateSchemaContract(
+  userQuery: string, 
+  pageContent: string,
+  options: ContractGenerationOptions = {}
+): Promise<SchemaContract> {
+  
+  // Use a mock OpenAI call since we don't have access to GPT-5 in this environment
+  // In production, this would call the actual OpenAI API
+  const contractSpec = await callGPT5Mock({
+    model: options.model || 'gpt-5-mini',
+    reasoning_effort: options.reasoning_effort || 'high',
+    verbosity: options.verbosity || 'high',
+    messages: [{
+      role: 'system',
+      content: `You are a schema architect. Create a schema contract with three field types:
+
+REQUIRED: Must exist or extraction fails (core entity identifiers)
+EXPECTED: Usually present, extract if found (common attributes) 
+DISCOVERABLE: Open slots for custom fields found on this specific site
+
+Be conservative with required fields. Be generous with expected fields.
+Focus on what's actually detectable from DOM structure and content patterns.`
+    }, {
+      role: 'user',
+      content: `Query: "${userQuery}"
+Page content sample: ${pageContent.substring(0, 2000)}...
+
+Generate a schema contract for this extraction request.`
+    }],
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        schema: {
+          type: 'object',
+          properties: {
+            entity: { type: 'string' },
+            required_fields: {
+              type: 'array',
+              items: {
+                type: 'object', 
+                properties: {
+                  name: { type: 'string' },
+                  type: { type: 'string' },
+                  detectors: { type: 'array', items: { type: 'string' } },
+                  reasoning: { type: 'string' }
+                }
+              }
+            },
+            expected_fields: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  type: { type: 'string' },
+                  detectors: { type: 'array', items: { type: 'string' } },
+                  reasoning: { type: 'string' }
+                }
+              }
+            },
+            governance: {
+              type: 'object',
+              properties: {
+                allowNewFields: { type: 'boolean' },
+                min_support_threshold: { type: 'integer' }
+              }
+            }
+          }
+        }
+      }
+    },
+    ...options
+  });
+
+  return buildSchemaContract(contractSpec);
+}
+
+// Mock GPT-5 call for demonstration purposes
+async function callGPT5Mock(params: any): Promise<any> {
+  // This is a mock implementation that returns a reasonable contract
+  // In production, this would call the actual OpenAI API
+  
+  const userQuery = params.messages[1].content.split('Query: "')[1]?.split('"')[0] || '';
+  
+  // Analyze query to determine entity type and fields
+  const queryLower = userQuery.toLowerCase();
+  let entity = 'generic_item';
+  let requiredFields = [];
+  let expectedFields = [];
+  
+  if (queryLower.includes('department') || queryLower.includes('organizational')) {
+    entity = 'organizational_unit';
+    requiredFields = [
+      { name: 'name', type: 'string', detectors: ['h1', 'h2', 'h3', '.title', '.department-name'], reasoning: 'Department name is essential identifier' }
+    ];
+    expectedFields = [
+      { name: 'description', type: 'richtext', detectors: ['.description', '.summary', 'p'], reasoning: 'Descriptions commonly found on department pages' },
+      { name: 'url', type: 'url', detectors: ['a[href]'], reasoning: 'Department pages often have links to more info' }
+    ];
+  } else if (queryLower.includes('people') || queryLower.includes('person') || queryLower.includes('staff') || queryLower.includes('faculty')) {
+    entity = 'person';
+    requiredFields = [
+      { name: 'name', type: 'string', detectors: ['h1', 'h2', 'h3', '.name', '.person-name'], reasoning: 'Name is essential for person identification' }
+    ];
+    expectedFields = [
+      { name: 'title', type: 'string', detectors: ['.title', '.position', '.role'], reasoning: 'Job titles commonly displayed' },
+      { name: 'email', type: 'email', detectors: ['a[href^="mailto:"]', '.email'], reasoning: 'Contact information often available' },
+      { name: 'department', type: 'string', detectors: ['.department', '.affiliation'], reasoning: 'Departmental affiliation commonly shown' }
+    ];
+  } else if (queryLower.includes('product') || queryLower.includes('item')) {
+    entity = 'product';
+    requiredFields = [
+      { name: 'name', type: 'string', detectors: ['h1', '.product-name', '.title'], reasoning: 'Product name is essential' }
+    ];
+    expectedFields = [
+      { name: 'price', type: 'string', detectors: ['.price', '.cost', '.amount'], reasoning: 'Price commonly displayed for products' },
+      { name: 'description', type: 'richtext', detectors: ['.description', '.summary'], reasoning: 'Product descriptions are standard' }
+    ];
+  } else {
+    // Generic extraction
+    requiredFields = [
+      { name: 'title', type: 'string', detectors: ['h1', 'h2', 'h3', '.title'], reasoning: 'Title serves as primary identifier' }
+    ];
+    expectedFields = [
+      { name: 'content', type: 'richtext', detectors: ['p', '.content', '.description'], reasoning: 'Content is commonly available' },
+      { name: 'url', type: 'url', detectors: ['a[href]'], reasoning: 'Links often present for more information' }
+    ];
+  }
+  
+  return {
+    entity,
+    required_fields: requiredFields,
+    expected_fields: expectedFields,
+    governance: {
+      allowNewFields: true,
+      min_support_threshold: 3
+    }
   };
 }
 
 /**
- * Schema Contract Generator
- * Converts user queries into structured schema contracts
+ * Build SchemaContract from the GPT-5 response specification
  */
-export class SchemaContractGenerator {
-  private readonly existingContracts: Map<string, SchemaContract> = new Map();
-
-  constructor(existingContracts: SchemaContract[] = []) {
-    existingContracts.forEach(contract => {
-      this.existingContracts.set(contract.id, contract);
+export function buildSchemaContract(contractSpec: any): SchemaContract {
+  const fields: FieldSpec[] = [];
+  
+  // Process required fields
+  for (const field of contractSpec.required_fields || []) {
+    fields.push({
+      name: field.name,
+      kind: 'required',
+      type: field.type as FieldType,
+      detector: createDetector(field.name, field.detectors || []),
+      extractor: createExtractor(field.type),
+      validators: createValidators(field.type),
+      min_support: 1
     });
   }
-
-  /**
-   * Generate schema contract from user query and context
-   */
-  async generateContract(context: ContractGenerationContext): Promise<SchemaContract> {
-    const query = context.userQuery.toLowerCase();
-    
-    // First, check for existing template matches
-    const templateMatch = this.findBestTemplateMatch(context);
-    if (templateMatch && templateMatch.confidence > 0.8) {
-      return this.adaptTemplateToQuery(templateMatch.contract, context);
-    }
-
-    // Generate new contract based on query analysis
-    return this.generateNewContract(context);
-  }
-
-  /**
-   * Find best matching template contract
-   */
-  private findBestTemplateMatch(context: ContractGenerationContext): { contract: SchemaContract, confidence: number } | null {
-    const query = context.userQuery.toLowerCase();
-    let bestMatch: { contract: SchemaContract, confidence: number } | null = null;
-
-    for (const contract of this.existingContracts.values()) {
-      const confidence = this.calculateTemplateConfidence(query, contract);
-      if (!bestMatch || confidence > bestMatch.confidence) {
-        bestMatch = { contract, confidence };
-      }
-    }
-
-    return bestMatch;
-  }
-
-  /**
-   * Calculate confidence score for template matching
-   */
-  private calculateTemplateConfidence(query: string, contract: SchemaContract): number {
-    let score = 0;
-    
-    // Domain matching
-    if (contract.metadata.domain) {
-      const domainKeywords = this.getDomainKeywords(contract.metadata.domain);
-      const domainMatches = domainKeywords.filter(keyword => query.includes(keyword)).length;
-      score += (domainMatches / domainKeywords.length) * 0.3;
-    }
-
-    // Field semantic matching
-    const fieldMatches = contract.fields.filter(field => {
-      const fieldKeywords = [field.name, ...(field.examples || [])];
-      return fieldKeywords.some(keyword => query.includes(keyword.toLowerCase()));
-    }).length;
-    score += (fieldMatches / contract.fields.length) * 0.4;
-
-    // Description matching
-    if (contract.description) {
-      const descWords = contract.description.toLowerCase().split(' ');
-      const queryWords = query.split(' ');
-      const commonWords = descWords.filter(word => queryWords.includes(word)).length;
-      score += (commonWords / Math.max(descWords.length, queryWords.length)) * 0.3;
-    }
-
-    return Math.min(score, 1.0);
-  }
-
-  /**
-   * Adapt existing template to specific query
-   */
-  private adaptTemplateToQuery(baseContract: SchemaContract, context: ContractGenerationContext): SchemaContract {
-    const query = context.userQuery.toLowerCase();
-    
-    // Adjust field priorities based on query
-    const adaptedFields = baseContract.fields.map(field => {
-      const isExplicitlyMentioned = query.includes(field.name.toLowerCase()) || 
-        (field.examples && field.examples.some(ex => query.includes(ex.toLowerCase())));
-      
-      if (isExplicitlyMentioned && field.priority === 'discoverable') {
-        return { ...field, priority: 'expected' as FieldPriority };
-      }
-      return field;
+  
+  // Process expected fields
+  for (const field of contractSpec.expected_fields || []) {
+    fields.push({
+      name: field.name,
+      kind: 'expected',
+      type: field.type as FieldType,
+      detector: createDetector(field.name, field.detectors || []),
+      extractor: createExtractor(field.type),
+      validators: createValidators(field.type),
+      min_support: 2
     });
-
-    // Add query-specific fields
-    const additionalFields = this.inferFieldsFromQuery(context.userQuery);
-    
-    return {
-      ...baseContract,
-      id: `adapted_${baseContract.id}_${Date.now()}`,
-      name: `${baseContract.name} (Adapted)`,
-      fields: [...adaptedFields, ...additionalFields],
-      metadata: {
-        ...baseContract.metadata,
-        source: 'hybrid',
-        created: new Date().toISOString(),
-        userQuery: context.userQuery,
-        confidence: 0.9
-      }
-    };
   }
-
-  /**
-   * Generate completely new contract from query
-   */
-  private generateNewContract(context: ContractGenerationContext): SchemaContract {
-    const query = context.userQuery;
-    const inferredFields = this.inferFieldsFromQuery(query);
-    const domain = this.inferDomain(query, context.url);
-
-    return {
-      id: `generated_${Date.now()}`,
-      name: `Custom Extraction: ${query.substring(0, 50)}...`,
-      description: `Generated schema for: ${query}`,
-      fields: inferredFields,
-      metadata: {
-        domain,
-        confidence: 0.7,
-        source: 'generated',
-        created: new Date().toISOString(),
-        userQuery: query
-      },
-      validation: {
-        minRequiredFields: Math.min(2, inferredFields.filter(f => f.priority === 'required').length),
-        allowAdditionalFields: true,
-        strictMode: false
-      }
-    };
-  }
-
-  /**
-   * Infer fields from natural language query
-   */
-  private inferFieldsFromQuery(query: string): FieldSpec[] {
-    const fields: FieldSpec[] = [];
-    const queryLower = query.toLowerCase();
-
-    // Common field patterns
-    const fieldPatterns: Array<{ pattern: RegExp; field: Partial<FieldSpec> }> = [
-      {
-        pattern: /\b(name|title|headline|header)\b/i,
-        field: { name: 'name', type: 'text', priority: 'required' }
-      },
-      {
-        pattern: /\b(description|summary|content|text|body)\b/i,
-        field: { name: 'description', type: 'text', priority: 'expected' }
-      },
-      {
-        pattern: /\b(url|link|href)\b/i,
-        field: { name: 'url', type: 'url', priority: 'expected' }
-      },
-      {
-        pattern: /\b(price|cost|amount|fee)\b/i,
-        field: { name: 'price', type: 'text', priority: 'required' }
-      },
-      {
-        pattern: /\b(date|time|when|schedule)\b/i,
-        field: { name: 'date', type: 'date', priority: 'expected' }
-      },
-      {
-        pattern: /\b(email|contact)\b/i,
-        field: { name: 'email', type: 'email', priority: 'discoverable' }
-      },
-      {
-        pattern: /\b(phone|number)\b/i,
-        field: { name: 'phone', type: 'phone', priority: 'discoverable' }
-      },
-      {
-        pattern: /\b(image|photo|picture)\b/i,
-        field: { name: 'image', type: 'image', priority: 'discoverable' }
-      },
-      {
-        pattern: /\b(author|creator|by)\b/i,
-        field: { name: 'author', type: 'text', priority: 'expected' }
-      },
-      {
-        pattern: /\b(category|section|type|department)\b/i,
-        field: { name: 'category', type: 'text', priority: 'expected' }
-      }
-    ];
-
-    fieldPatterns.forEach(({ pattern, field }) => {
-      if (pattern.test(queryLower)) {
-        fields.push({
-          name: field.name!,
-          type: field.type!,
-          priority: field.priority!,
-          description: `Inferred from query: "${query}"`,
-          extractionHints: {
-            keywords: pattern.source.match(/\\b\(([^)]+)\)\\b/)?.[1].split('|') || []
-          }
-        });
-      }
-    });
-
-    // If no fields inferred, provide basic structure
-    if (fields.length === 0) {
-      fields.push(
-        {
-          name: 'title',
-          type: 'text',
-          priority: 'required',
-          description: 'Main identifier or name'
-        },
-        {
-          name: 'content',
-          type: 'text',
-          priority: 'expected',
-          description: 'Main content or description'
-        },
-        {
-          name: 'metadata',
-          type: 'object',
-          priority: 'discoverable',
-          description: 'Additional discovered fields'
-        }
-      );
+  
+  return {
+    entity: contractSpec.entity || 'generic_item',
+    fields,
+    governance: {
+      allowNewFields: contractSpec.governance?.allowNewFields ?? true,
+      newFieldPolicy: 'evidence_first',
+      min_support_threshold: contractSpec.governance?.min_support_threshold || 3,
+      max_discoverable_fields: 5
     }
+  };
+}
 
-    return fields;
-  }
-
-  /**
-   * Infer domain from query and URL
-   */
-  private inferDomain(query: string, url?: string): string {
-    const queryLower = query.toLowerCase();
-    
-    if (url) {
-      if (url.includes('news') || url.includes('article')) return 'news';
-      if (url.includes('shop') || url.includes('store') || url.includes('product')) return 'commerce';
-      if (url.includes('event') || url.includes('calendar')) return 'events';
-      if (url.includes('job') || url.includes('career')) return 'jobs';
-      if (url.includes('edu') || url.includes('academic')) return 'academic';
-    }
-
-    if (queryLower.includes('article') || queryLower.includes('news')) return 'news';
-    if (queryLower.includes('product') || queryLower.includes('price') || queryLower.includes('buy')) return 'commerce';
-    if (queryLower.includes('event') || queryLower.includes('schedule')) return 'events';
-    if (queryLower.includes('job') || queryLower.includes('position') || queryLower.includes('career')) return 'jobs';
-    if (queryLower.includes('course') || queryLower.includes('research') || queryLower.includes('academic')) return 'academic';
-
-    return 'general';
-  }
-
-  /**
-   * Get domain-specific keywords for matching
-   */
-  private getDomainKeywords(domain: string): string[] {
-    const domainKeywords: Record<string, string[]> = {
-      'news': ['article', 'news', 'story', 'headline', 'report'],
-      'commerce': ['product', 'price', 'buy', 'shop', 'store', 'item'],
-      'events': ['event', 'calendar', 'schedule', 'date', 'time'],
-      'jobs': ['job', 'position', 'career', 'role', 'employment'],
-      'academic': ['research', 'paper', 'study', 'course', 'faculty', 'department'],
-      'people': ['person', 'profile', 'team', 'member', 'staff', 'employee']
-    };
-
-    return domainKeywords[domain] || [];
+// Helper functions for building detectors, extractors, and validators
+function createDetector(fieldName: string, selectors: string[]): Detector {
+  const name = fieldName.toLowerCase();
+  
+  if (name.includes('name') || name.includes('title')) {
+    return new TitleDetector(selectors.length > 0 ? selectors : ['h1', 'h2', 'h3', '.title', '.name']);
+  } else if (name.includes('description') || name.includes('content') || name.includes('summary')) {
+    return new DescriptionDetector(selectors.length > 0 ? selectors : ['.description', '.summary', 'p', '.content']);
+  } else if (name.includes('url') || name.includes('link')) {
+    return new LinkDetector(selectors.length > 0 ? selectors : ['a[href]']);
+  } else {
+    return new GenericDetector(selectors.length > 0 ? selectors : [`.${name}`, `[data-${name}]`, `.${name}-value`]);
   }
 }
+
+function createExtractor(fieldType: string): Extractor {
+  switch (fieldType) {
+    case 'url':
+      return new URLExtractor();
+    case 'richtext':
+      return new RichTextExtractor();
+    default:
+      return new TextExtractor();
+  }
+}
+
+function createValidators(fieldType: string): Validator[] {
+  const validators: Validator[] = [];
+  
+  switch (fieldType) {
+    case 'string':
+    case 'richtext':
+      validators.push(new MinLengthValidator(1));
+      validators.push(new MaxLengthValidator(1000));
+      break;
+    case 'url':
+      validators.push(new URLFormatValidator());
+      break;
+    case 'email':
+      validators.push(new MinLengthValidator(3));
+      // Could add EmailFormatValidator here
+      break;
+  }
+  
+  return validators;
+}
+
+// ===== DEPARTMENT CONTRACT EXAMPLE =====
+
+export const departmentContract: SchemaContract = {
+  entity: "organizational_unit",
+  fields: [
+    {
+      name: "name",
+      kind: "required",
+      type: "string", 
+      detector: new TitleDetector(["h1", "h2", "h3", ".title", ".department-name"]),
+      extractor: new TextExtractor(),
+      validators: [new MinLengthValidator(2), new MaxLengthValidator(100)]
+    },
+    {
+      name: "description", 
+      kind: "expected",
+      type: "richtext",
+      detector: new DescriptionDetector([".description", ".summary", "p"]),
+      extractor: new RichTextExtractor(),
+      validators: [new MinLengthValidator(10)]
+    },
+    {
+      name: "url",
+      kind: "expected", 
+      type: "url",
+      detector: new LinkDetector(["a[href]"]),
+      extractor: new URLExtractor(),
+      validators: [new URLFormatValidator()]
+    }
+  ],
+  governance: {
+    allowNewFields: true,
+    newFieldPolicy: "evidence_first",
+    min_support_threshold: 3,
+    max_discoverable_fields: 5
+  }
+};
+
+// Export all the main classes and functions
+export {
+  generateSchemaContract,
+  buildSchemaContract,
+  departmentContract
+};

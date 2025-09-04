@@ -3,7 +3,7 @@ const { DynamoDBClient, PutItemCommand, GetItemCommand, ScanCommand } = require(
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { processNaturalLanguage } = require('./atlas-generator-integration');
 const { processWithPlanBasedSystem } = require('./worker-enhanced');
-const { processWithEvidenceFirstSystem } = require('./evidence-first-bridge');
+const { processWithUnifiedExtractor } = require('./evidence-first-bridge');
 
 const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const sqs = new SQSClient({ region: process.env.AWS_REGION || 'us-west-2' });
@@ -201,11 +201,12 @@ async function handleExtract(method, body, headers) {
             }
           },
           postProcessing: params.postProcessing || null,
-          formats: params.formats || ['structured']
+          formats: params.formats || ['structured'],
+          UNIFIED_EXTRACTOR_ENABLED: params.UNIFIED_EXTRACTOR_ENABLED
         };
         
-        // Process with evidence-first enhanced system
-        const extractionResult = await processWithEvidenceFirstSystem(htmlContent, extractionParams);
+        // Process with unified extractor system
+        const extractionResult = await processWithUnifiedExtractor(htmlContent, extractionParams);
         
         // Clean extraction result for JSON serialization
         const cleanResult = cleanExtractionResult(extractionResult);
@@ -344,6 +345,22 @@ exports.handler = async (event) => {
     if (path === '/health' || path === '/dev/health') {
       return await handleHealth();
     }
+    
+    // Debug endpoint to check environment
+    if (path === '/debug' || path === '/dev/debug') {
+      return createResponse(200, {
+        env_check: {
+          NODE_ENV: process.env.NODE_ENV,
+          UNIFIED_EXTRACTOR_ENABLED: process.env.UNIFIED_EXTRACTOR_ENABLED,
+          OPENAI_API_KEY_present: !!process.env.OPENAI_API_KEY,
+          OPENAI_API_KEY_length: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0,
+          OPENAI_API_KEY_prefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 10) : null,
+          all_env_keys: Object.keys(process.env).filter(k => k.includes('OPENAI') || k.includes('UNIFIED')),
+          lambda_region: process.env.AWS_REGION,
+          lambda_function_name: process.env.AWS_LAMBDA_FUNCTION_NAME
+        }
+      });
+    }
 
     // AI Processing endpoint - Direct processing (no queuing)
     if (path === '/api/ai/process' || path === '/dev/api/ai/process') {
@@ -382,13 +399,14 @@ exports.handler = async (event) => {
               url: targetUrl,
               extractionInstructions: params.prompt || params.input,
               formats: aiResult.formats || ['structured'],
+              UNIFIED_EXTRACTOR_ENABLED: params.UNIFIED_EXTRACTOR_ENABLED,
               ...aiResult.params
             };
             
             console.log('Processing with plan-based system:', extractionParams);
             
-            // Process with evidence-first enhanced system
-            const extractionResult = await processWithEvidenceFirstSystem(htmlContent, extractionParams);
+            // Process with unified extractor system
+            const extractionResult = await processWithUnifiedExtractor(htmlContent, extractionParams);
             
             // Clean extraction result for JSON serialization
             const cleanResult = cleanExtractionResult(extractionResult);

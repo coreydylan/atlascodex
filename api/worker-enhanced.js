@@ -6833,6 +6833,7 @@ if (require.main === module) {
 // Export for use in other modules
 module.exports = {
   processWithPlanBasedSystem,
+  performCrawl,
   PlanExecutor,
   BasicPlanner,
   SimpleEvaluator,

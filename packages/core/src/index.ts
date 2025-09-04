@@ -14,6 +14,36 @@ export * from './template-service';
 export * from './core-templates';
 export * from './evaluation-framework';
 
+// Export Evidence-First Adaptive Extraction System
+export * from './schema-contracts';
+export * from './evidence-first-processor';
+export * from './deterministic-extractor';
+export * from './llm-augmentation';
+export * from './schema-negotiator';
+export * from './evidence-first-integration';
+export * from './integration-bridge';
+export * from './adaptive-display';
+export * from './promotion-quorum';
+export * from './promotion-quorum-example';
+export * from './types/evidence-first';
+
+// Export JSON Schema Draft 2020-12 Validation System
+export * from './schema-validator';
+
+// Export Production Telemetry System
+export * from './production-telemetry';
+
+// Export Evidence-First Support Systems
+export * from './anchor-system';
+export * from './content-hasher';
+export * from './production-safety';
+export * from './evidence-first-support-example';
+
+// Export Production Readiness Gate System
+export * from './production-gate-checklist';
+export * from './production-gate-runner';
+export * from './production-gate-example';
+
 // Job types
 export const JobStatus = z.enum(['pending', 'running', 'completed', 'failed']);
 export const JobType = z.enum(['scrape', 'extract', 'crawl']);
