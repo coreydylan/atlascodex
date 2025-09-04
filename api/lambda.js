@@ -4,6 +4,8 @@ const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { processNaturalLanguage } = require('./atlas-generator-integration');
 const { processWithPlanBasedSystem } = require('./worker-enhanced');
 const { processWithUnifiedExtractor } = require('./evidence-first-bridge');
+const memoryAnalyticsAPI = require('./memory-analytics');
+const qaInterface = require('./qa-interface');
 
 const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const sqs = new SQSClient({ region: process.env.AWS_REGION || 'us-west-2' });
@@ -448,6 +450,17 @@ exports.handler = async (event) => {
       }
     }
 
+    // 🧠 Memory Analytics API endpoints
+    if (path.includes('/memory/')) {
+      const memoryPath = path.replace(/^\/dev/, '').replace(/^\/prod/, ''); // Remove stage prefix
+      return await memoryAnalyticsAPI.handleRequest(memoryPath, method, JSON.parse(body || '{}'), headers);
+    }
+
+    // 🤖 Q&A Interface API endpoints
+    if (path.includes('/api/ask') || path.includes('/api/analyze') || path.includes('/api/insights') || path.includes('/api/qa/')) {
+      return await qaInterface.handleQARequest(path, method, body, headers);
+    }
+
     // Default response
     return createResponse(404, { 
       error: 'Not Found',
@@ -455,7 +468,19 @@ exports.handler = async (event) => {
       availableEndpoints: [
         'GET /health',
         'POST /api/extract',
-        'GET /api/extract/{jobId}'
+        'GET /api/extract/{jobId}',
+        'POST /api/ask',
+        'POST /api/analyze',
+        'POST /api/insights',
+        'POST /api/qa/session',
+        'GET /api/qa/session/{id}',
+        'POST /api/qa/session/{id}',
+        'GET /api/qa/health',
+        'GET /memory/stats',
+        'GET /memory/insights',
+        'POST /memory/similar',
+        'POST /memory/optimizations',
+        'GET /memory/health'
       ]
     });
 

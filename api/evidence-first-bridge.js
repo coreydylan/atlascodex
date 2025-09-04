@@ -14,6 +14,12 @@
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
 
+// Import the extraction memory system
+const extractionMemory = require('./services/extraction-memory');
+
+// Import the Q&A service for intelligent data interaction
+const extractionQA = require('./services/extraction-qa');
+
 // Feature flag - HARD DEFAULT = false (must be explicitly enabled)
 const UNIFIED_EXTRACTOR_ENABLED = process.env.UNIFIED_EXTRACTOR_ENABLED === 'true' || false;
 
@@ -84,6 +90,7 @@ class UnifiedExtractor {
 
   /**
    * Main processing method with feature flag check and navigation detection
+   * Enhanced with self-learning memory system
    */
   async processWithUnifiedExtractor(htmlContent, params) {
     const startTime = Date.now();
@@ -97,20 +104,51 @@ class UnifiedExtractor {
         return await processWithPlanBasedSystem(htmlContent, params);
       }
 
+      // 🧠 MEMORY INTEGRATION: Check for similar past extractions
+      console.log('🧠 Checking extraction memory for optimization opportunities...');
+      const memoryOptimizations = await this.getMemoryOptimizations(params);
+      
+      if (memoryOptimizations.suggestions.length > 0) {
+        console.log(`💡 Found ${memoryOptimizations.suggestions.length} optimization suggestions from memory`);
+        params = this.applyMemoryOptimizations(params, memoryOptimizations);
+      }
+
       // Check for explicit multi-page request or auto-detect navigation need
       const needsNavigation = this.shouldUseMultiPageExtraction(params, htmlContent);
       
+      let result;
       if (needsNavigation.required) {
         console.log('🧭 Multi-page extraction required:', needsNavigation.reason);
-        return await this.performNavigationAwareExtraction(htmlContent, params);
+        result = await this.performNavigationAwareExtraction(htmlContent, params);
+      } else {
+        // Single-page extraction (existing logic moved to separate method)
+        result = await this.performSinglePageExtraction(htmlContent, params, startTime);
       }
 
-      // Single-page extraction (existing logic moved to separate method)
-      return await this.performSinglePageExtraction(htmlContent, params, startTime);
+      // 🧠 MEMORY INTEGRATION: Store this extraction for future learning
+      console.log('🧠 Storing extraction memory for future optimization...');
+      await this.storeExtractionMemory(params, result);
+
+      return result;
 
     } catch (error) {
       console.error('💥 Unified extractor failed:', error.message);
       console.error('💥 Full error:', error);
+      
+      // Store failure in memory for learning
+      const failureResult = {
+        success: false,
+        error: error.message,
+        data: [],
+        metadata: { processingTime: Date.now() - startTime, processingMethod: 'unified_extractor_error' }
+      };
+      
+      try {
+        await this.storeExtractionMemory(params, failureResult);
+      } catch (memoryError) {
+        console.warn('⚠️ Could not store failure in memory:', memoryError.message);
+      }
+      
       return this.fallbackToPlanBasedSystem(htmlContent, params, 'unified_extractor_error', error.message);
     }
   }
@@ -509,7 +547,7 @@ Return ONLY the JSON response - no explanations or additional text.`;
       
       const processingTime = Date.now() - startTime;
       
-      return {
+      const baseResult = {
         success: true,
         data: deduplicatedData,
         metadata: {
@@ -529,6 +567,8 @@ Return ONLY the JSON response - no explanations or additional text.`;
           fallbackUsed: false
         }
       };
+      
+      return this.createEnhancedResult(baseResult);
       
     } catch (error) {
       console.error('💥 Navigation-aware extraction failed:', error.message);
@@ -577,6 +617,150 @@ Return ONLY the JSON response - no explanations or additional text.`;
     }
     
     return deduplicated;
+  }
+
+  /**
+   * 🧠 MEMORY INTEGRATION: Get optimization suggestions from memory
+   */
+  async getMemoryOptimizations(params) {
+    try {
+      const optimizations = await extractionMemory.getSuggestedOptimizations({
+        url: params.url,
+        extractionInstructions: params.extractionInstructions,
+        schema: params.schema,
+        metadata: {
+          extractionType: this.inferExtractionType(params.extractionInstructions)
+        }
+      });
+
+      return optimizations;
+    } catch (error) {
+      console.warn('⚠️ Could not get memory optimizations:', error.message);
+      return { suggestions: [], confidence: 0, reasoning: 'Memory system unavailable' };
+    }
+  }
+
+  /**
+   * 🧠 MEMORY INTEGRATION: Apply optimization suggestions to current params
+   */
+  applyMemoryOptimizations(params, optimizations) {
+    const optimizedParams = { ...params };
+
+    for (const suggestion of optimizations.suggestions) {
+      switch (suggestion.type) {
+        case 'processing_method':
+          console.log(`💡 Memory suggests processing method: ${suggestion.suggestion}`);
+          optimizedParams.preferredMethod = suggestion.suggestion;
+          break;
+
+        case 'multi_page':
+          if (suggestion.suggestion === true) {
+            console.log('💡 Memory suggests using multi-page extraction');
+            optimizedParams.forceMultiPage = true;
+          }
+          break;
+
+        case 'schema':
+          if (suggestion.suggestion && typeof suggestion.suggestion === 'object') {
+            console.log('💡 Memory suggests enhanced schema');
+            optimizedParams.schema = this.mergeSchemas(params.schema, suggestion.suggestion);
+          }
+          break;
+
+        default:
+          console.log(`💡 Memory suggestion: ${suggestion.type} - ${suggestion.reason}`);
+          break;
+      }
+    }
+
+    // Add optimization metadata
+    optimizedParams.memoryOptimizations = {
+      applied: optimizations.suggestions.length,
+      confidence: optimizations.confidence,
+      basedOn: optimizations.basedOn
+    };
+
+    return optimizedParams;
+  }
+
+  /**
+   * 🧠 MEMORY INTEGRATION: Store extraction result for future learning
+   */
+  async storeExtractionMemory(params, result) {
+    try {
+      const memory = await extractionMemory.storeExtractionMemory({
+        url: params.url,
+        extractionInstructions: params.extractionInstructions,
+        schema: params.schema,
+        metadata: {
+          extractionType: this.inferExtractionType(params.extractionInstructions),
+          memoryOptimizations: params.memoryOptimizations
+        }
+      }, result);
+
+      console.log(`🧠 Stored memory: ${memory.id} (quality: ${memory.qualityScore})`);
+      return memory;
+    } catch (error) {
+      console.warn('⚠️ Could not store extraction memory:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Infer extraction type from instructions for memory categorization
+   */
+  inferExtractionType(instructions) {
+    if (!instructions) return 'unknown';
+    
+    const lower = instructions.toLowerCase();
+    if (lower.includes('article') || lower.includes('news') || lower.includes('headline')) return 'articles';
+    if (lower.includes('product') || lower.includes('item') || lower.includes('catalog')) return 'products';
+    if (lower.includes('job') || lower.includes('career') || lower.includes('position')) return 'jobs';
+    if (lower.includes('team') || lower.includes('member') || lower.includes('people') || lower.includes('staff')) return 'people';
+    if (lower.includes('event') || lower.includes('calendar') || lower.includes('schedule')) return 'events';
+    if (lower.includes('contact') || lower.includes('phone') || lower.includes('email')) return 'contacts';
+    if (lower.includes('department') || lower.includes('division') || lower.includes('faculty')) return 'departments';
+    
+    return 'general';
+  }
+
+  /**
+   * Enhanced schema merging with memory insights
+   */
+  mergeSchemas(currentSchema, suggestedSchema) {
+    if (!currentSchema || !suggestedSchema) {
+      return suggestedSchema || currentSchema;
+    }
+
+    try {
+      const merged = JSON.parse(JSON.stringify(currentSchema));
+      
+      if (suggestedSchema.items && suggestedSchema.items.properties && 
+          merged.items && merged.items.properties) {
+        
+        // Add any additional properties from successful schema
+        Object.keys(suggestedSchema.items.properties).forEach(key => {
+          if (!merged.items.properties[key]) {
+            merged.items.properties[key] = suggestedSchema.items.properties[key];
+            console.log(`🧠 Added field "${key}" from memory`);
+          }
+        });
+
+        // Merge required fields intelligently
+        if (suggestedSchema.items.required && merged.items.required) {
+          const combinedRequired = [...new Set([
+            ...merged.items.required,
+            ...suggestedSchema.items.required
+          ])];
+          merged.items.required = combinedRequired;
+        }
+      }
+
+      return merged;
+    } catch (error) {
+      console.warn('⚠️ Schema merge failed, using current schema:', error.message);
+      return currentSchema;
+    }
   }
   
   /**
@@ -630,7 +814,7 @@ Return ONLY the JSON response - no explanations or additional text.`;
 
     const processingTime = Date.now() - startTime;
     
-    return {
+    const baseResult = {
       success: true,
       data: validationResult.cleanData,
       metadata: {
@@ -647,6 +831,8 @@ Return ONLY the JSON response - no explanations or additional text.`;
         fallbackUsed: false
       }
     };
+    
+    return this.createEnhancedResult(baseResult);
   }
 
   /**
@@ -684,6 +870,37 @@ Return ONLY the JSON response - no explanations or additional text.`;
           fallbackError: fallbackError.message
         }
       };
+    }
+  }
+
+  /**
+   * Create enhanced result with Q&A interface
+   * Adds intelligent querying capabilities to extraction results
+   */
+  createEnhancedResult(baseResult) {
+    try {
+      // Only add Q&A interface for successful extractions with data
+      if (baseResult.success && baseResult.data && (Array.isArray(baseResult.data) ? baseResult.data.length > 0 : Object.keys(baseResult.data).length > 0)) {
+        const qaInterface = extractionQA.createQAInterface(baseResult.data);
+        
+        return {
+          ...baseResult,
+          qa: qaInterface,
+          enhanced_features: {
+            natural_language_qa: true,
+            pattern_analysis: true,
+            insight_generation: true,
+            conversational_queries: true
+          }
+        };
+      }
+      
+      // Return original result if no enhancement possible
+      return baseResult;
+      
+    } catch (error) {
+      console.warn('⚠️ Could not create Q&A interface:', error.message);
+      return baseResult; // Return original result if Q&A fails
     }
   }
 }
