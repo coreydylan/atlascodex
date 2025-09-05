@@ -133,6 +133,13 @@ functions:
       patterns:
         - '!**'
         - 'api/worker-enhanced.js'
+        - 'api/services/**'
+        - 'api/config/**'
+        - 'api/schemas/**'
+        - 'api/middleware/**'
+        - 'api/ai-processor.js'
+        - 'api/evidence-first-bridge.js'
+        - 'node_modules/**'
     events:
       - sqs:
           arn:
