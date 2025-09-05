@@ -505,6 +505,40 @@ exports.handler = async (event) => {
               ...aiResult.params
             };
             
+            // Determine if this should be processed async or immediately
+            const shouldProcessAsync = (
+              params.forceMultiPage ||
+              (params.maxPages && params.maxPages > 3) ||
+              (params.maxLinks && params.maxLinks > 10) ||
+              (params.timeout && params.timeout > 25)
+            );
+
+            if (shouldProcessAsync) {
+              // Queue for async processing
+              console.log(`Queuing complex AI extraction for async processing: job ${jobId}`);
+              try {
+                await sqs.send(new SendMessageCommand({
+                  QueueUrl: process.env.QUEUE_URL,
+                  MessageBody: JSON.stringify({
+                    jobId,
+                    type: 'extract', 
+                    params: extractionParams,
+                    htmlContent
+                  })
+                }));
+                
+                return createResponse(202, {
+                  jobId,
+                  status: 'queued',
+                  message: 'Complex extraction queued for background processing. Use GET /api/extract/{jobId} to check status.'
+                });
+              } catch (sqsError) {
+                console.error('Failed to queue AI processing job:', sqsError);
+                // Fall back to immediate processing
+                console.log('SQS unavailable, falling back to immediate processing');
+              }
+            }
+            
             console.log('Processing with plan-based system:', extractionParams);
             
             // Process with unified extractor system
