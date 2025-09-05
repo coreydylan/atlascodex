@@ -342,7 +342,7 @@ resources:
       Type: AWS::ApiGateway::GatewayResponse
       Properties:
         RestApiId:
-          Ref: RestApiApigEvent
+          Ref: ApiGatewayRestApi
         ResponseType: DEFAULT_4XX
         ResponseParameters:
           gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
@@ -354,7 +354,7 @@ resources:
       Type: AWS::ApiGateway::GatewayResponse
       Properties:
         RestApiId:
-          Ref: RestApiApigEvent
+          Ref: ApiGatewayRestApi
         ResponseType: DEFAULT_5XX
         ResponseParameters:
           gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
