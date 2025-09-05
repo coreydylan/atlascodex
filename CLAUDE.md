@@ -184,6 +184,21 @@ curl -X POST https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/api/extr
 
 ### 6. Deployment Process
 
+#### ⚠️ CRITICAL: Environment Variables for Deployment
+
+**NEVER deploy without environment variables!** The OpenAI integration will fail silently.
+
+```bash
+# ❌ WRONG - This will deploy with empty environment variables
+serverless deploy --stage production
+
+# ✅ CORRECT - Use the deployment script
+./deploy.sh production
+
+# ✅ OR manually export variables first
+source .env && serverless deploy --stage production
+```
+
 #### Development Environment Deployment
 
 The main branch automatically deploys to development. To test changes:
@@ -204,8 +219,11 @@ gh pr create --title "Add new extraction feature" --body "Description of changes
 
 #### Manual Development Deployment (if needed)
 ```bash
-# Deploy to development environment
-npm run deploy:dev
+# ALWAYS use the deployment script to ensure env vars are loaded
+./deploy.sh dev
+
+# OR if you must use serverless directly:
+source .env && serverless deploy --stage dev
 
 # Monitor deployment
 aws logs tail /aws/lambda/atlas-codex-dev-api --follow --since 2m

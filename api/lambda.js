@@ -483,6 +483,14 @@ exports.handler = async (event) => {
         try {
           const params = JSON.parse(body);
           
+          // Validate input
+          if (!params.prompt && !params.input && !params.extractionInstructions) {
+            return createResponse(400, {
+              error: 'Bad Request',
+              message: 'Missing required field: prompt, input, or extractionInstructions'
+            });
+          }
+          
           // Check for async processing FIRST before expensive operations
           const shouldProcessAsync = (
             params.forceMultiPage ||
@@ -539,7 +547,7 @@ exports.handler = async (event) => {
           }
 
           // For immediate processing, do the expensive operations
-          const aiResult = await processNaturalLanguage(params.prompt || params.input, {
+          const aiResult = await processNaturalLanguage(params.prompt || params.input || params.extractionInstructions || '', {
             apiKey: params.apiKey || headers['x-openai-key'] || headers['x-api-key'] || process.env.OPENAI_API_KEY
           });
           
