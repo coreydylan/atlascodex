@@ -482,6 +482,63 @@ exports.handler = async (event) => {
       if (method === 'POST') {
         try {
           const params = JSON.parse(body);
+          
+          // Check for async processing FIRST before expensive operations
+          const shouldProcessAsync = (
+            params.forceMultiPage ||
+            (params.maxPages && params.maxPages > 3) ||
+            (params.maxLinks && params.maxLinks > 10) ||
+            (params.timeout && params.timeout > 25)
+          );
+
+          if (shouldProcessAsync) {
+            // Queue immediately for background processing - no expensive operations first
+            const jobId = generateJobId('extract');
+            console.log(`Queuing complex AI extraction for async processing: job ${jobId}`);
+            
+            try {
+              await sqs.send(new SendMessageCommand({
+                QueueUrl: process.env.QUEUE_URL,
+                MessageBody: JSON.stringify({
+                  jobId,
+                  type: 'ai_process',
+                  prompt: params.prompt || params.input,
+                  params: params,
+                  apiKey: params.apiKey || headers['x-openai-key'] || headers['x-api-key'] || process.env.OPENAI_API_KEY
+                })
+              }));
+
+              // Create DynamoDB record for job tracking
+              try {
+                await dynamodb.send(new PutItemCommand({
+                  TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'prod' : 'dev'}`,
+                  Item: {
+                    id: { S: jobId },
+                    status: { S: 'queued' },
+                    url: { S: 'pending' }, // Will be determined during processing
+                    prompt: { S: params.prompt || params.input },
+                    created: { S: new Date().toISOString() },
+                    updated: { S: new Date().toISOString() }
+                  }
+                }));
+              } catch (dbError) {
+                console.warn('Failed to create job record:', dbError);
+                // Continue anyway - job is still in SQS
+              }
+              
+              return createResponse(202, {
+                jobId,
+                status: 'queued',
+                message: 'Complex extraction queued for background processing. Use GET /api/extract/{jobId} to check status.'
+              });
+            } catch (sqsError) {
+              console.error('Failed to queue AI processing job:', sqsError);
+              // Fall back to immediate processing
+              console.log('SQS unavailable, falling back to immediate processing');
+            }
+          }
+
+          // For immediate processing, do the expensive operations
           const aiResult = await processNaturalLanguage(params.prompt || params.input, {
             apiKey: params.apiKey || headers['x-openai-key'] || headers['x-api-key'] || process.env.OPENAI_API_KEY
           });
@@ -523,57 +580,7 @@ exports.handler = async (event) => {
               ...aiResult.params
             };
             
-            // Determine if this should be processed async or immediately
-            const shouldProcessAsync = (
-              params.forceMultiPage ||
-              (params.maxPages && params.maxPages > 3) ||
-              (params.maxLinks && params.maxLinks > 10) ||
-              (params.timeout && params.timeout > 25)
-            );
-
-            if (shouldProcessAsync) {
-              // Queue for async processing
-              console.log(`Queuing complex AI extraction for async processing: job ${jobId}`);
-              try {
-                await sqs.send(new SendMessageCommand({
-                  QueueUrl: process.env.QUEUE_URL,
-                  MessageBody: JSON.stringify({
-                    jobId,
-                    type: 'extract', 
-                    params: extractionParams,
-                    htmlContent
-                  })
-                }));
-
-                // Create DynamoDB record for job tracking
-                try {
-                  await dynamodb.send(new PutItemCommand({
-                    TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'prod' : 'dev'}`,
-                    Item: {
-                      id: { S: jobId },
-                      status: { S: 'queued' },
-                      url: { S: extractionParams.url },
-                      prompt: { S: extractionParams.extractionInstructions },
-                      created: { S: new Date().toISOString() },
-                      updated: { S: new Date().toISOString() }
-                    }
-                  }));
-                } catch (dbError) {
-                  console.warn('Failed to create job record:', dbError);
-                  // Continue anyway - job is still in SQS
-                }
-                
-                return createResponse(202, {
-                  jobId,
-                  status: 'queued',
-                  message: 'Complex extraction queued for background processing. Use GET /api/extract/{jobId} to check status.'
-                });
-              } catch (sqsError) {
-                console.error('Failed to queue AI processing job:', sqsError);
-                // Fall back to immediate processing
-                console.log('SQS unavailable, falling back to immediate processing');
-              }
-            }
+            // Process immediately since async check was done at the beginning
             
             console.log('Processing with plan-based system:', extractionParams);
             
