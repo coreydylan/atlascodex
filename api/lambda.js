@@ -236,10 +236,13 @@ async function handleExtract(method, body, headers) {
               Item: {
                 id: { S: jobId },
                 status: { S: 'queued' },
+                type: { S: 'extract' },
                 url: { S: params.url },
                 prompt: { S: params.extractionInstructions },
                 created: { S: new Date().toISOString() },
-                updated: { S: new Date().toISOString() }
+                updated: { S: new Date().toISOString() },
+                createdAt: { N: Date.now().toString() },
+                updatedAt: { N: Date.now().toString() }
               }
             }));
           } catch (dbError) {
@@ -416,8 +419,8 @@ async function handleGetJob(jobId) {
     const job = {
       jobId: result.Item.id.S,
       status: result.Item.status.S,
-      type: result.Item.type.S,
-      createdAt: parseInt(result.Item.createdAt.N),
+      type: result.Item.type?.S || 'extract',
+      createdAt: result.Item.createdAt ? parseInt(result.Item.createdAt.N) : Date.now(),
       result: result.Item.result ? JSON.parse(result.Item.result.S) : null,
       error: result.Item.error?.S || null,
       logs: result.Item.logs?.L?.map(log => ({
@@ -523,10 +526,13 @@ exports.handler = async (event) => {
                   Item: {
                     id: { S: jobId },
                     status: { S: 'queued' },
+                    type: { S: 'ai_process' },
                     url: { S: 'pending' }, // Will be determined during processing
                     prompt: { S: params.prompt || params.input },
                     created: { S: new Date().toISOString() },
-                    updated: { S: new Date().toISOString() }
+                    updated: { S: new Date().toISOString() },
+                    createdAt: { N: Date.now().toString() },
+                    updatedAt: { N: Date.now().toString() }
                   }
                 }));
               } catch (dbError) {
