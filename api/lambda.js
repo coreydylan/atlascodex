@@ -208,6 +208,39 @@ async function handleExtract(method, body, headers) {
         console.log('DynamoDB unavailable, proceeding without storage:', dbError.message);
       }
 
+      // Determine if this should be processed async or immediately
+      const shouldProcessAsync = (
+        params.forceMultiPage ||
+        (params.maxPages && params.maxPages > 3) ||
+        (params.maxLinks && params.maxLinks > 10) ||
+        (params.timeout && params.timeout > 25)
+      );
+
+      if (shouldProcessAsync) {
+        // Queue for async processing
+        console.log(`Queuing complex extraction for async processing: job ${jobId}`);
+        try {
+          await sqs.send(new SendMessageCommand({
+            QueueUrl: process.env.QUEUE_URL,
+            MessageBody: JSON.stringify({
+              jobId,
+              type: 'extract',
+              params: params
+            })
+          }));
+          
+          return createResponse(202, {
+            jobId,
+            status: 'queued',
+            message: 'Complex extraction queued for background processing. Use GET /api/extract/{jobId} to check status.'
+          });
+        } catch (sqsError) {
+          console.error('Failed to queue job:', sqsError);
+          // Fall back to immediate processing
+          console.log('SQS unavailable, falling back to immediate processing');
+        }
+      }
+
       // Process extraction immediately with our improved system
       try {
         console.log(`Processing extraction immediately for job ${jobId}`);
