@@ -28,15 +28,15 @@ class GPT5Client {
     });
 
     try {
-      // Use correct parameter based on model (GPT-4o models use max_tokens)
-      const isGPT4o = model.includes('gpt-4o');
-      const tokenParam = 'max_tokens';
+      // Use correct parameter based on model
+      const isGPT5 = model.includes('gpt-5');
+      const tokenParam = isGPT5 ? 'max_completion_tokens' : 'max_tokens';
       
       const requestParams = {
         model,
         messages,
+        // GPT-5 only supports default temperature
         [tokenParam]: this.getMaxTokens(model),
-        temperature: 0.3,
         // Structured outputs with guaranteed schema compliance
         response_format: outputSchema 
           ? { 
@@ -52,7 +52,10 @@ class GPT5Client {
             : undefined
       };
       
-      // All models support temperature
+      // Add temperature for non-GPT-5 models only
+      if (!isGPT5) {
+        requestParams.temperature = 0.3;
+      }
       
       // Note: reasoning_effort and verbosity may be added in future GPT-5 updates
       
