@@ -6,7 +6,7 @@ Atlas Codex is a production-ready, AI-powered web extraction platform that intel
 
 ## 📚 GPT-5 Migration Resources
 
-**Important**: We are actively migrating from GPT-4 to GPT-5 (released August 7, 2025). Before making any AI/LLM changes, please review:
+**Important**: We are actively migrating from GPT-4 to GPT-5 (released August 7, 2025). The system now includes async processing for complex extractions. Before making any AI/LLM changes, please review:
 - **[GPT-5 Training Center](./gpt5-training/README.md)** - Comprehensive GPT-5 documentation and migration guides
 - **[Refactoring Report](./gpt5-training/REFACTORING_REPORT.md)** - Detailed analysis and migration roadmap
 - **[Migration Guide](./gpt5-training/migration-guide/step-by-step.md)** - Step-by-step migration instructions
