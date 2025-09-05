@@ -336,3 +336,28 @@ resources:
           Ref: WebsocketDefaultLambdaFunction
         Principal: apigateway.amazonaws.com
         Action: lambda:InvokeFunction
+    
+    # CORS Gateway Responses - Ensure CORS headers on error responses
+    GatewayResponse4XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        RestApiId:
+          Ref: RestApiApigEvent
+        ResponseType: DEFAULT_4XX
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,x-api-key,X-Amz-Security-Token,X-Amz-User-Agent,X-Amzn-Trace-Id'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+          gatewayresponse.header.Access-Control-Max-Age: "'86400'"
+    
+    GatewayResponse5XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        RestApiId:
+          Ref: RestApiApigEvent
+        ResponseType: DEFAULT_5XX
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,x-api-key,X-Amz-Security-Token,X-Amz-User-Agent,X-Amzn-Trace-Id'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+          gatewayresponse.header.Access-Control-Max-Age: "'86400'"
