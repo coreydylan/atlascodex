@@ -131,14 +131,16 @@ functions:
     handler: api/worker-enhanced.handler
     package:
       patterns:
-        - '!**'
         - 'api/worker-enhanced.js'
         - 'api/services/**'
         - 'api/config/**'
         - 'api/schemas/**'
         - 'api/middleware/**'
         - 'api/ai-processor.js'
+        - 'api/ai-processor-v2.js'
         - 'api/evidence-first-bridge.js'
+        - 'api/evidence-first-bridge-v2.js'
+        - 'api/atlas-generator-integration.js'
         - 'node_modules/**'
     events:
       - sqs:
