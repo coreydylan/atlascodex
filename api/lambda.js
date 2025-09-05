@@ -201,7 +201,7 @@ async function handleExtract(method, body, headers) {
       // Store initial job in DynamoDB (skip for now due to permissions)
       try {
         await dynamodb.send(new PutItemCommand({
-          TableName: 'atlas-codex-jobs',
+          TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'prod' : 'dev'}`,
           Item: job
         }));
       } catch (dbError) {
@@ -316,7 +316,7 @@ async function handleExtract(method, body, headers) {
         // Store result in DynamoDB (skip for now due to permissions)
         try {
           await dynamodb.send(new PutItemCommand({
-            TableName: 'atlas-codex-jobs',
+            TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'prod' : 'dev'}`,
             Item: completedJob
           }));
         } catch (dbError) {
@@ -353,7 +353,7 @@ async function handleExtract(method, body, headers) {
         // Store error in DynamoDB (skip for now due to permissions)
         try {
           await dynamodb.send(new PutItemCommand({
-            TableName: 'atlas-codex-jobs',
+            TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'prod' : 'dev'}`,
             Item: failedJob
           }));
         } catch (dbError) {
@@ -387,7 +387,7 @@ async function handleExtract(method, body, headers) {
 async function handleGetJob(jobId) {
   try {
     const result = await dynamodb.send(new GetItemCommand({
-      TableName: 'atlas-codex-jobs',
+      TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'prod' : 'dev'}`,
       Key: { id: { S: jobId } }
     }));
 
