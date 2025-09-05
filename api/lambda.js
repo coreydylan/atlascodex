@@ -228,6 +228,24 @@ async function handleExtract(method, body, headers) {
               params: params
             })
           }));
+
+          // Create DynamoDB record for job tracking
+          try {
+            await dynamodb.send(new PutItemCommand({
+              TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'prod' : 'dev'}`,
+              Item: {
+                id: { S: jobId },
+                status: { S: 'queued' },
+                url: { S: params.url },
+                prompt: { S: params.extractionInstructions },
+                created: { S: new Date().toISOString() },
+                updated: { S: new Date().toISOString() }
+              }
+            }));
+          } catch (dbError) {
+            console.warn('Failed to create job record:', dbError);
+            // Continue anyway - job is still in SQS
+          }
           
           return createResponse(202, {
             jobId,
@@ -526,6 +544,24 @@ exports.handler = async (event) => {
                     htmlContent
                   })
                 }));
+
+                // Create DynamoDB record for job tracking
+                try {
+                  await dynamodb.send(new PutItemCommand({
+                    TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'prod' : 'dev'}`,
+                    Item: {
+                      id: { S: jobId },
+                      status: { S: 'queued' },
+                      url: { S: extractionParams.url },
+                      prompt: { S: extractionParams.extractionInstructions },
+                      created: { S: new Date().toISOString() },
+                      updated: { S: new Date().toISOString() }
+                    }
+                  }));
+                } catch (dbError) {
+                  console.warn('Failed to create job record:', dbError);
+                  // Continue anyway - job is still in SQS
+                }
                 
                 return createResponse(202, {
                   jobId,
