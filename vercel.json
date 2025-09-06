@@ -16,15 +16,15 @@
   "installCommand": "echo 'No install needed for static site'",
   "devCommand": "python3 -m http.server 8000",
   "env": {
-    "VITE_API_URL": "@api_url",
-    "VITE_API_KEY": "@api_key",
-    "VITE_ENVIRONMENT": "@environment"
+    "VITE_API_URL": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production",
+    "VITE_API_KEY": "atlas-prod-key-2024",
+    "VITE_ENVIRONMENT": "production"
   },
   "build": {
     "env": {
-      "VITE_API_URL": "@api_url",
-      "VITE_API_KEY": "@api_key", 
-      "VITE_ENVIRONMENT": "@environment"
+      "VITE_API_URL": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production",
+      "VITE_API_KEY": "atlas-prod-key-2024",
+      "VITE_ENVIRONMENT": "production"
     }
   },
   "headers": [
