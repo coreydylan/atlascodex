@@ -16,15 +16,15 @@
   "installCommand": "cd packages/frontend && npm install",
   "devCommand": "cd packages/frontend && npm run dev",
   "env": {
-    "VITE_API_URL": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production",
-    "VITE_API_KEY": "atlas-prod-key-2024",
-    "VITE_ENVIRONMENT": "production"
+    "VITE_API_URL": "@vite_api_url",
+    "VITE_API_KEY": "@vite_api_key",
+    "VITE_ENVIRONMENT": "@environment"
   },
   "build": {
     "env": {
-      "VITE_API_URL": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production",
-      "VITE_API_KEY": "atlas-prod-key-2024",
-      "VITE_ENVIRONMENT": "production"
+      "VITE_API_URL": "@vite_api_url",
+      "VITE_API_KEY": "@vite_api_key",
+      "VITE_ENVIRONMENT": "@environment"
     }
   },
   "headers": [
@@ -54,10 +54,5 @@
       ]
     }
   ],
-  "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production/:path*"
-    }
-  ]
+  "rewrites": []
 }
