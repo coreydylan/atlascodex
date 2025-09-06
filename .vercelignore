@@ -1,0 +1,31 @@
+# Ignore API folder - using AWS Lambda instead
+api/
+
+# Node modules
+node_modules/
+
+# Git
+.git/
+.gitignore
+
+# Development files
+*.log
+.env
+.env.local
+
+# Documentation
+docs/
+*.md
+
+# Build files (except frontend dist)
+packages/backend/
+packages/shared/
+
+# Config files  
+serverless.yml
+.github/
+
+# Temporary files
+tmp/
+temp/
+.cache/

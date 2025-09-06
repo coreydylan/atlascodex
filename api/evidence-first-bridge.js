@@ -56,7 +56,30 @@ addFormats(ajv);
 class UnifiedExtractor {
   constructor() {
     this.openai = null;
+    this.gpt5Client = null;
     this.initializeOpenAI();
+  }
+
+  calculateComplexity(html, instructions) {
+    // Calculate complexity score (0-1) based on HTML size and instruction complexity
+    const htmlLength = html.length;
+    const instructionLength = instructions.length;
+    
+    let complexity = 0;
+    
+    // HTML size factor
+    if (htmlLength < 5000) complexity += 0.1;
+    else if (htmlLength < 20000) complexity += 0.3;
+    else if (htmlLength < 50000) complexity += 0.5;
+    else complexity += 0.7;
+    
+    // Instruction complexity factor
+    if (instructionLength > 200) complexity += 0.2;
+    if (instructions.match(/\b(all|every|each|multiple|comprehensive)\b/i)) complexity += 0.1;
+    if (instructions.match(/\b(analyze|reason|complex|detailed|deep)\b/i)) complexity += 0.2;
+    
+    // Cap at 1.0
+    return Math.min(complexity, 1.0);
   }
 
   initializeOpenAI() {
@@ -66,6 +89,22 @@ class UnifiedExtractor {
       console.log('🔑 Key length:', apiKey ? apiKey.length : 0);
       console.log('🔑 Key starts with sk-:', apiKey ? apiKey.startsWith('sk-') : false);
       
+      // Check if GPT-5 is enabled
+      const gpt5Enabled = process.env.GPT5_ENABLED === 'true';
+      console.log('🤖 GPT-5 enabled:', gpt5Enabled);
+      
+      if (gpt5Enabled) {
+        // Use GPT-5 client with model selection
+        try {
+          const GPT5Client = require('./services/gpt5-client');
+          this.gpt5Client = new GPT5Client();
+          console.log('✅ GPT-5 client initialized with model selection');
+        } catch (gpt5Error) {
+          console.warn('⚠️ GPT-5 client initialization failed, falling back to standard OpenAI:', gpt5Error.message);
+        }
+      }
+      
+      // Always initialize standard OpenAI as fallback
       const OpenAI = require('openai');
       if (apiKey && apiKey.length > 10) {
         this.openai = new OpenAI({
@@ -192,24 +231,48 @@ RESPONSE FORMAT:
 Return ONLY the JSON response - no explanations or additional text.`;
 
     try {
-      const response = await this.openai.chat.completions.create({
-        model: 'gpt-4o',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a unified schema generation and data extraction system. Generate appropriate JSON schemas and extract data accordingly. Return only valid JSON with "schema" and "data" properties.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0, // Consistent output
-        max_tokens: 6000 // Increased for schema + data
-      });
+      let response;
+      const messages = [
+        {
+          role: 'system',
+          content: 'You are a unified schema generation and data extraction system. Generate appropriate JSON schemas and extract data accordingly. Return only valid JSON with "schema" and "data" properties.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ];
+      
+      // Use GPT-5 if available, otherwise fallback to standard OpenAI
+      if (this.gpt5Client) {
+        console.log('🤖 Using GPT-5 with intelligent model selection');
+        
+        // Determine complexity based on HTML length and extraction instructions
+        const complexity = this.calculateComplexity(htmlContent, extractionInstructions);
+        
+        response = await this.gpt5Client.complete({
+          messages,
+          complexity,
+          budget: 0.05, // $0.05 budget per extraction
+          requiresReasoning: extractionInstructions.toLowerCase().includes('reason') || 
+                            extractionInstructions.toLowerCase().includes('complex') ||
+                            extractionInstructions.toLowerCase().includes('analyze'),
+          outputFormat: 'json'
+        });
+        
+        console.log(`✅ GPT-5 extraction completed with model: ${response.model}`);
+      } else {
+        // Fallback to standard OpenAI
+        response = await this.openai.chat.completions.create({
+          model: 'gpt-4o',
+          messages,
+          response_format: { type: 'json_object' },
+          temperature: 0, // Consistent output
+          max_tokens: 6000 // Increased for schema + data
+        });
+      }
 
-      const content = response.choices[0].message.content;
+      const content = response.choices ? response.choices[0].message.content : response.content;
       
       try {
         const result = JSON.parse(content);
@@ -342,6 +405,16 @@ Return ONLY the JSON response - no explanations or additional text.`;
     const instructions = (params.extractionInstructions || '').toLowerCase();
     const url = (params.url || '').toLowerCase();
     const htmlLower = htmlContent.toLowerCase();
+    
+    // Check for forceMultiPage flag first - highest priority
+    if (params.forceMultiPage === true) {
+      return {
+        required: true,
+        reason: 'force_multipage_enabled',
+        confidence: 1.0,
+        forced: true
+      };
+    }
     
     // Explicit multi-page keywords in user request
     const explicitKeywords = [

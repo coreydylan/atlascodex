@@ -10,21 +10,23 @@
       "production": true
     }
   },
-  "buildCommand": "echo 'Using root index.html'",
-  "outputDirectory": ".",
-  "framework": null,
-  "installCommand": "echo 'No install needed for static site'",
-  "devCommand": "python3 -m http.server 8000",
+  "buildCommand": "cd packages/frontend && npm install && npm run build",
+  "outputDirectory": "packages/frontend/dist",
+  "framework": "vite",
+  "installCommand": "cd packages/frontend && npm install",
+  "devCommand": "cd packages/frontend && npm run dev",
   "env": {
-    "VITE_API_URL": "@api_url",
-    "VITE_API_KEY": "@api_key",
-    "VITE_ENVIRONMENT": "@environment"
+    "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
+    "VITE_API_KEY": "dev-e41d8c40f0bc54fcc590dc54b7ebe138344afe9dc41690c38bd99c838116405c",
+    "ENVIRONMENT": "preview",
+    "FORCE_GPT4": "false"
   },
   "build": {
     "env": {
-      "VITE_API_URL": "@api_url",
-      "VITE_API_KEY": "@api_key", 
-      "VITE_ENVIRONMENT": "@environment"
+      "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
+      "VITE_API_KEY": "atlas-prod-key-2024",
+      "ENVIRONMENT": "production",
+      "FORCE_GPT4": "true"
     }
   },
   "headers": [
@@ -49,7 +51,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self' https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';"
+          "value": "default-src 'self' https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com https://fonts.googleapis.com https://fonts.gstatic.com https://r2cdn.perplexity.ai; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://vercel.live; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com https://r2cdn.perplexity.ai; frame-src 'self' https://vercel.live;"
         }
       ]
     }
@@ -59,10 +61,5 @@
       "source": "/api/:path*",
       "destination": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/:path*"
     }
-  ],
-  "functions": {
-    "api/*.js": {
-      "maxDuration": 60
-    }
-  }
+  ]
 }

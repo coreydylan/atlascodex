@@ -1,0 +1,14 @@
+{
+  "rollbackId": "rollback-1756971217722",
+  "timestamp": "2025-09-04T07:33:37.721Z",
+  "environment": "development",
+  "triggeredBy": "coreydylan",
+  "reason": "Emergency rollback",
+  "actions": [
+    "Disabled GPT5_ENABLED feature flag",
+    "Forced all traffic to GPT-4",
+    "Cleared GPT-5 cache",
+    "Updated environment configuration"
+  ],
+  "status": "completed"
+}

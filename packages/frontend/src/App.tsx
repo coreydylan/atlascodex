@@ -6,6 +6,7 @@ bg-orange-100 text-orange-600 border-orange-300 bg-gray-50 border-gray-200
 hover:bg-gray-100 bg-orange-50 border-orange-200 hover:bg-gray-50
 bg-white text-gray-900 text-gray-600 min-h-screen border-b
 text-2xl font-semibold text-sm font-medium
+CORS fix update - v1
 */
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -159,6 +160,7 @@ function App() {
   const [aiMode, setAiMode] = useState(false);
   const [aiProcessing, setAiProcessing] = useState(false);
   const [useUnifiedExtractor, setUseUnifiedExtractor] = useState(false);
+  const [forceMultiPage, setForceMultiPage] = useState(false);
   
   // Options state - always visible
   const [includeHtml, setIncludeHtml] = useState(true);
@@ -230,7 +232,8 @@ function App() {
           body: JSON.stringify({
             prompt: url,
             autoExecute: true,
-            UNIFIED_EXTRACTOR_ENABLED: useUnifiedExtractor
+            UNIFIED_EXTRACTOR_ENABLED: useUnifiedExtractor,
+            forceMultiPage: forceMultiPage
           })
         });
         
@@ -311,7 +314,8 @@ function App() {
             body: JSON.stringify({
               prompt: fullUrl,
               autoExecute: false, // Get the structured params but don't auto-execute
-              UNIFIED_EXTRACTOR_ENABLED: useUnifiedExtractor
+              UNIFIED_EXTRACTOR_ENABLED: useUnifiedExtractor,
+              forceMultiPage: forceMultiPage
             }),
           });
           
@@ -377,6 +381,7 @@ function App() {
         type: mode,
         useEvidenceFirst: true, // Enable evidence-first processing
         UNIFIED_EXTRACTOR_ENABLED: useUnifiedExtractor, // Add unified extractor flag
+        forceMultiPage: forceMultiPage, // Add force multi-page flag
         ...extractedParams // This now includes extractionInstructions, outputSchema, postProcessing from AI
       };
       
@@ -1089,6 +1094,35 @@ Examples:
                       </p>
                     </div>
                   )}
+
+                  {/* Force Multi-Page Option - Only visible when Unified Extractor is enabled */}
+                  {useUnifiedExtractor && (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="force-multipage" className="text-sm font-medium">
+                          Force Multi-Page Extraction
+                        </Label>
+                        <Switch
+                          id="force-multipage"
+                          checked={forceMultiPage}
+                          onCheckedChange={setForceMultiPage}
+                        />
+                      </div>
+                      {forceMultiPage && (
+                        <div className="bg-gradient-to-r from-blue-50 to-cyan-50 border border-blue-200 rounded-lg p-3">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Map className="w-4 h-4 text-blue-600" />
+                            <span className="text-xs font-semibold text-blue-900">
+                              Multi-Page Mode Enabled
+                            </span>
+                          </div>
+                          <p className="text-xs text-blue-700">
+                            Will crawl and extract from multiple pages for more comprehensive results. Recommended for news sites and dynamic content.
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
                   <div className="border-t pt-4" />
                   {mode === 'scrape' && (
                     <>
@@ -1280,7 +1314,8 @@ Examples:
                       url: url || 'example.com', 
                       type: mode, 
                       format,
-                      ...(useUnifiedExtractor && { UNIFIED_EXTRACTOR_ENABLED: true })
+                      ...(useUnifiedExtractor && { UNIFIED_EXTRACTOR_ENABLED: true }),
+                      ...(forceMultiPage && { forceMultiPage: true })
                     }, null, 2)}'
                   </div>
                   <Button variant="outline" size="sm" className="mt-3 w-full">

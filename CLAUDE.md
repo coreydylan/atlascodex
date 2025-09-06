@@ -184,6 +184,21 @@ curl -X POST https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/api/extr
 
 ### 6. Deployment Process
 
+#### ⚠️ CRITICAL: Environment Variables for Deployment
+
+**NEVER deploy without environment variables!** The OpenAI integration will fail silently.
+
+```bash
+# ❌ WRONG - This will deploy with empty environment variables
+serverless deploy --stage production
+
+# ✅ CORRECT - Use the deployment script
+./deploy.sh production
+
+# ✅ OR manually export variables first
+source .env && serverless deploy --stage production
+```
+
 #### Development Environment Deployment
 
 The main branch automatically deploys to development. To test changes:
@@ -204,8 +219,11 @@ gh pr create --title "Add new extraction feature" --body "Description of changes
 
 #### Manual Development Deployment (if needed)
 ```bash
-# Deploy to development environment
-npm run deploy:dev
+# ALWAYS use the deployment script to ensure env vars are loaded
+./deploy.sh dev
+
+# OR if you must use serverless directly:
+source .env && serverless deploy --stage dev
 
 # Monitor deployment
 aws logs tail /aws/lambda/atlas-codex-dev-api --follow --since 2m
@@ -495,3 +513,34 @@ npm run typecheck
 ---
 
 **Remember**: Always use git worktrees for feature development, test thoroughly, and follow the CI/CD pipeline for deployments. When in doubt, check the README.md for additional context and the deployment pipeline status in GitHub Actions.
+
+## 🤖 Claude AI Agents
+
+### PR Analyzer Agent
+
+Atlas Codex includes a specialized Claude AI agent for comprehensive pull request analysis:
+
+**Location**: `start here - pr analyzer/`
+
+**Usage**:
+```
+Hey Claude, please read the pr-analyzer.md file in the "start here - pr analyzer" folder and act as that agent. Review PR #123.
+```
+
+**Features**:
+- Comprehensive code review with security scanning
+- Protection of critical extraction functionality
+- Performance analysis and optimization suggestions
+- Automated compliance checking
+- Breaking change detection
+
+**Commands**:
+- `/review` - Standard comprehensive PR review
+- `/security-check` - Focus on security vulnerabilities
+- `/performance-check` - Focus on performance issues
+- `/extraction-check` - Validate extraction logic integrity
+- `/quick-review` - Brief assessment for small changes
+
+**Integration**: Direct Claude to read the `pr-analyzer.md` file in the `start here - pr analyzer/` folder and act as that agent.
+
+See `start here - pr analyzer/README.md` for usage instructions and `pr-analyzer.md` for the complete agent definition.

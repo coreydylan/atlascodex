@@ -1,9 +1,35 @@
-// Atlas Codex API Lambda Handler
+// Atlas Codex API Lambda Handler with GPT-5 Support - Updated 2025-09-04
 const { DynamoDBClient, PutItemCommand, GetItemCommand, ScanCommand } = require('@aws-sdk/client-dynamodb');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
-const { processNaturalLanguage } = require('./atlas-generator-integration');
+const RolloutConfig = require('../config/gpt5-rollout');
+
+// GPT-5 Migration: Conditional imports based on rollout
+let processNaturalLanguage;
+let processWithUnifiedExtractor;
+
+if (RolloutConfig.shouldUseGPT5()) {
+  console.log('🚀 GPT-5 ACTIVE: Loading V2 implementations');
+  const { AIProcessorV2 } = require('./ai-processor-v2');
+  const { EvidenceFirstBridgeV2 } = require('./evidence-first-bridge-v2');
+  
+  // Create wrapper functions for V2 implementations
+  const aiProcessor = new AIProcessorV2();
+  const evidenceBridge = new EvidenceFirstBridgeV2();
+  
+  processNaturalLanguage = async (input, options) => {
+    return await aiProcessor.processNaturalLanguage(input, options);
+  };
+  
+  processWithUnifiedExtractor = async (html, params) => {
+    return await evidenceBridge.processWithEvidenceFirst(html, params);
+  };
+} else {
+  console.log('📦 GPT-4 ACTIVE: Loading legacy implementations');
+  processNaturalLanguage = require('./atlas-generator-integration').processNaturalLanguage;
+  processWithUnifiedExtractor = require('./evidence-first-bridge').processWithUnifiedExtractor;
+}
+
 const { processWithPlanBasedSystem } = require('./worker-enhanced');
-const { processWithUnifiedExtractor } = require('./evidence-first-bridge');
 
 const dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-west-2' });
 const sqs = new SQSClient({ region: process.env.AWS_REGION || 'us-west-2' });
@@ -98,7 +124,7 @@ function cleanExtractionResult(result) {
 // CORS headers
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type,X-Api-Key,Authorization,x-api-key',
+  'Access-Control-Allow-Headers': 'Content-Type,X-Api-Key,Authorization,x-api-key,X-Amz-Date,X-Amz-Security-Token,X-Amz-User-Agent,X-Amzn-Trace-Id',
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
   'Access-Control-Max-Age': '86400'
 };
@@ -175,11 +201,65 @@ async function handleExtract(method, body, headers) {
       // Store initial job in DynamoDB (skip for now due to permissions)
       try {
         await dynamodb.send(new PutItemCommand({
-          TableName: 'atlas-codex-jobs',
+          TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'production' : 'dev'}`,
           Item: job
         }));
       } catch (dbError) {
         console.log('DynamoDB unavailable, proceeding without storage:', dbError.message);
+      }
+
+      // Determine if this should be processed async or immediately
+      const shouldProcessAsync = (
+        params.forceMultiPage ||
+        (params.maxPages && params.maxPages > 3) ||
+        (params.maxLinks && params.maxLinks > 10) ||
+        (params.timeout && params.timeout > 25)
+      );
+
+      if (shouldProcessAsync) {
+        // Queue for async processing
+        console.log(`Queuing complex extraction for async processing: job ${jobId}`);
+        try {
+          await sqs.send(new SendMessageCommand({
+            QueueUrl: process.env.QUEUE_URL,
+            MessageBody: JSON.stringify({
+              jobId,
+              type: 'extract',
+              params: params
+            })
+          }));
+
+          // Create DynamoDB record for job tracking
+          try {
+            await dynamodb.send(new PutItemCommand({
+              TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'production' : 'dev'}`,
+              Item: {
+                id: { S: jobId },
+                status: { S: 'queued' },
+                type: { S: 'extract' },
+                url: { S: params.url },
+                prompt: { S: params.extractionInstructions },
+                created: { S: new Date().toISOString() },
+                updated: { S: new Date().toISOString() },
+                createdAt: { N: Date.now().toString() },
+                updatedAt: { N: Date.now().toString() }
+              }
+            }));
+          } catch (dbError) {
+            console.warn('Failed to create job record:', dbError);
+            // Continue anyway - job is still in SQS
+          }
+          
+          return createResponse(202, {
+            jobId,
+            status: 'queued',
+            message: 'Complex extraction queued for background processing. Use GET /api/extract/{jobId} to check status.'
+          });
+        } catch (sqsError) {
+          console.error('Failed to queue job:', sqsError);
+          // Fall back to immediate processing
+          console.log('SQS unavailable, falling back to immediate processing');
+        }
       }
 
       // Process extraction immediately with our improved system
@@ -187,8 +267,32 @@ async function handleExtract(method, body, headers) {
         console.log(`Processing extraction immediately for job ${jobId}`);
         
         // Fetch HTML content (Node.js 20 has built-in fetch)
-        const response = await fetch(params.url);
-        const htmlContent = await response.text();
+        const fetchTimeout = params.timeout ? (params.timeout * 1000) / 2 : 30000; // Half of extraction timeout or 30s
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), fetchTimeout);
+        
+        let htmlContent;
+        try {
+          const response = await fetch(params.url, { 
+            signal: controller.signal,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (compatible; AtlasCodex/1.0)'
+            }
+          });
+          clearTimeout(timeoutId);
+          
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          
+          htmlContent = await response.text();
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          if (fetchError.name === 'AbortError') {
+            throw new Error(`Request timeout after ${fetchTimeout/1000}s while fetching ${params.url}`);
+          }
+          throw new Error(`Failed to fetch ${params.url}: ${fetchError.message}`);
+        }
         
         // Convert API params to worker format
         const extractionParams = {
@@ -204,7 +308,12 @@ async function handleExtract(method, body, headers) {
           },
           postProcessing: params.postProcessing || null,
           formats: params.formats || ['structured'],
-          UNIFIED_EXTRACTOR_ENABLED: params.UNIFIED_EXTRACTOR_ENABLED
+          UNIFIED_EXTRACTOR_ENABLED: params.UNIFIED_EXTRACTOR_ENABLED,
+          forceMultiPage: params.forceMultiPage || false,
+          timeout: params.timeout || 60, // Default 60 seconds for extraction operations
+          maxPages: params.maxPages || 5,
+          maxLinks: params.maxLinks || 20,
+          maxDepth: params.maxDepth || 2
         };
         
         // Process with unified extractor system
@@ -228,7 +337,7 @@ async function handleExtract(method, body, headers) {
         // Store result in DynamoDB (skip for now due to permissions)
         try {
           await dynamodb.send(new PutItemCommand({
-            TableName: 'atlas-codex-jobs',
+            TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'production' : 'dev'}`,
             Item: completedJob
           }));
         } catch (dbError) {
@@ -265,7 +374,7 @@ async function handleExtract(method, body, headers) {
         // Store error in DynamoDB (skip for now due to permissions)
         try {
           await dynamodb.send(new PutItemCommand({
-            TableName: 'atlas-codex-jobs',
+            TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'production' : 'dev'}`,
             Item: failedJob
           }));
         } catch (dbError) {
@@ -299,7 +408,7 @@ async function handleExtract(method, body, headers) {
 async function handleGetJob(jobId) {
   try {
     const result = await dynamodb.send(new GetItemCommand({
-      TableName: 'atlas-codex-jobs',
+      TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'production' : 'dev'}`,
       Key: { id: { S: jobId } }
     }));
 
@@ -310,8 +419,8 @@ async function handleGetJob(jobId) {
     const job = {
       jobId: result.Item.id.S,
       status: result.Item.status.S,
-      type: result.Item.type.S,
-      createdAt: parseInt(result.Item.createdAt.N),
+      type: result.Item.type?.S || 'extract',
+      createdAt: result.Item.createdAt ? parseInt(result.Item.createdAt.N) : Date.now(),
       result: result.Item.result ? JSON.parse(result.Item.result.S) : null,
       error: result.Item.error?.S || null,
       logs: result.Item.logs?.L?.map(log => ({
@@ -357,7 +466,11 @@ exports.handler = async (event) => {
           OPENAI_API_KEY_present: !!process.env.OPENAI_API_KEY,
           OPENAI_API_KEY_length: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0,
           OPENAI_API_KEY_prefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 10) : null,
-          all_env_keys: Object.keys(process.env).filter(k => k.includes('OPENAI') || k.includes('UNIFIED')),
+          GPT5_ENABLED: process.env.GPT5_ENABLED,
+          GPT5_MODEL_SELECTION: process.env.GPT5_MODEL_SELECTION,
+          GPT5_FALLBACK_ENABLED: process.env.GPT5_FALLBACK_ENABLED,
+          GPT5_REASONING_ENABLED: process.env.GPT5_REASONING_ENABLED,
+          all_env_keys: Object.keys(process.env).filter(k => k.includes('OPENAI') || k.includes('UNIFIED') || k.includes('GPT5')),
           lambda_region: process.env.AWS_REGION,
           lambda_function_name: process.env.AWS_LAMBDA_FUNCTION_NAME
         }
@@ -366,11 +479,82 @@ exports.handler = async (event) => {
 
     // AI Processing endpoint - Direct processing (no queuing)
     if (path === '/api/ai/process' || path === '/dev/api/ai/process') {
+      if (method === 'OPTIONS') {
+        return createResponse(200, {});
+      }
       if (method === 'POST') {
         try {
           const params = JSON.parse(body);
-          const aiResult = await processNaturalLanguage(params.prompt || params.input, {
-            apiKey: params.apiKey || headers['x-openai-key'] || process.env.OPENAI_API_KEY
+          
+          // Validate input
+          if (!params.prompt && !params.input && !params.extractionInstructions) {
+            return createResponse(400, {
+              error: 'Bad Request',
+              message: 'Missing required field: prompt, input, or extractionInstructions'
+            });
+          }
+          
+          // Check for async processing FIRST before expensive operations
+          const shouldProcessAsync = (
+            params.forceMultiPage ||
+            (params.maxPages && params.maxPages > 3) ||
+            (params.maxLinks && params.maxLinks > 10) ||
+            (params.timeout && params.timeout > 25)
+          );
+
+          if (shouldProcessAsync) {
+            // Queue immediately for background processing - no expensive operations first
+            const jobId = generateJobId('extract');
+            console.log(`Queuing complex AI extraction for async processing: job ${jobId}`);
+            
+            try {
+              await sqs.send(new SendMessageCommand({
+                QueueUrl: process.env.QUEUE_URL,
+                MessageBody: JSON.stringify({
+                  jobId,
+                  type: 'ai_process',
+                  prompt: params.prompt || params.input,
+                  params: params,
+                  apiKey: params.apiKey || headers['x-openai-key'] || headers['x-api-key'] || process.env.OPENAI_API_KEY
+                })
+              }));
+
+              // Create DynamoDB record for job tracking
+              try {
+                await dynamodb.send(new PutItemCommand({
+                  TableName: `atlas-codex-jobs-${process.env.NODE_ENV === 'production' ? 'production' : 'dev'}`,
+                  Item: {
+                    id: { S: jobId },
+                    status: { S: 'queued' },
+                    type: { S: 'ai_process' },
+                    url: { S: 'pending' }, // Will be determined during processing
+                    prompt: { S: params.prompt || params.input },
+                    created: { S: new Date().toISOString() },
+                    updated: { S: new Date().toISOString() },
+                    createdAt: { N: Date.now().toString() },
+                    updatedAt: { N: Date.now().toString() }
+                  }
+                }));
+              } catch (dbError) {
+                console.warn('Failed to create job record:', dbError);
+                // Continue anyway - job is still in SQS
+              }
+              
+              return createResponse(202, {
+                jobId,
+                status: 'queued',
+                message: 'Complex extraction queued for background processing. Use GET /api/extract/{jobId} to check status.'
+              });
+            } catch (sqsError) {
+              console.error('Failed to queue AI processing job:', sqsError);
+              // Fall back to immediate processing
+              console.log('SQS unavailable, falling back to immediate processing');
+            }
+          }
+
+          // For immediate processing, do the expensive operations
+          const aiResult = await processNaturalLanguage(params.prompt || params.input || params.extractionInstructions || '', {
+            apiKey: params.apiKey || headers['x-openai-key'] || headers['x-api-key'] || process.env.OPENAI_API_KEY
           });
           
           // Auto-execute extraction with improved plan-based system
@@ -402,8 +586,15 @@ exports.handler = async (event) => {
               extractionInstructions: params.prompt || params.input,
               formats: aiResult.formats || ['structured'],
               UNIFIED_EXTRACTOR_ENABLED: params.UNIFIED_EXTRACTOR_ENABLED,
+              forceMultiPage: params.forceMultiPage || false,
+              timeout: params.timeout || 60, // Default 60 seconds for extraction operations
+              maxPages: params.maxPages || 5,
+              maxLinks: params.maxLinks || 20,
+              maxDepth: params.maxDepth || 2,
               ...aiResult.params
             };
+            
+            // Process immediately since async check was done at the beginning
             
             console.log('Processing with plan-based system:', extractionParams);
             

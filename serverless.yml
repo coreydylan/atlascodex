@@ -11,6 +11,11 @@ provider:
     MASTER_API_KEY: ${env:MASTER_API_KEY, 'test-key-123'}
     OPENAI_API_KEY: ${env:OPENAI_API_KEY, ''}
     UNIFIED_EXTRACTOR_ENABLED: ${env:UNIFIED_EXTRACTOR_ENABLED, 'false'}
+    # GPT-5 Configuration
+    GPT5_ENABLED: ${env:GPT5_ENABLED, 'true'}
+    GPT5_MODEL_SELECTION: ${env:GPT5_MODEL_SELECTION, 'auto'}
+    GPT5_FALLBACK_ENABLED: ${env:GPT5_FALLBACK_ENABLED, 'true'}
+    GPT5_REASONING_ENABLED: ${env:GPT5_REASONING_ENABLED, 'true'}
     QUEUE_URL: 
       Ref: JobQueue
 
@@ -81,17 +86,42 @@ functions:
         - 'api/ai-processor.js'
         - 'api/worker-enhanced.js'  # Include our improved extraction system
         - 'api/evidence-first-bridge.js'  # Include unified extractor
+        - 'api/services/**'  # Include GPT-5 services
+        - 'api/ai-processor-v2.js'  # Include GPT-5 AI processor
+        - 'api/evidence-first-bridge-v2.js'  # Include GPT-5 evidence bridge
         - 'node_modules/**'
     events:
       - http:
           path: /{proxy+}
           method: ANY
-          cors: true
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - x-api-key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+            allowCredentials: false
       - http:
           path: /
           method: ANY
-          cors: true
-    timeout: 30
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - x-api-key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+            allowCredentials: false
+    timeout: 120
     memorySize: 1024
     environment:
       WEBSOCKET_API_ENDPOINT:
@@ -101,8 +131,17 @@ functions:
     handler: api/worker-enhanced.handler
     package:
       patterns:
-        - '!**'
         - 'api/worker-enhanced.js'
+        - 'api/services/**'
+        - 'api/config/**'
+        - 'api/schemas/**'
+        - 'api/middleware/**'
+        - 'api/ai-processor.js'
+        - 'api/ai-processor-v2.js'
+        - 'api/evidence-first-bridge.js'
+        - 'api/evidence-first-bridge-v2.js'
+        - 'api/atlas-generator-integration.js'
+        - 'node_modules/**'
     events:
       - sqs:
           arn:
@@ -150,7 +189,7 @@ resources:
     JobsTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: ${self:service}-jobs
+        TableName: ${self:service}-jobs-${self:provider.stage}
         BillingMode: PAY_PER_REQUEST
         AttributeDefinitions:
           - AttributeName: id
@@ -162,7 +201,7 @@ resources:
     JobQueue:
       Type: AWS::SQS::Queue
       Properties:
-        QueueName: ${self:service}-queue
+        QueueName: ${self:service}-queue-${self:provider.stage}
         VisibilityTimeout: 360  # 6 minutes (longer than Lambda timeout)
         MessageRetentionPeriod: 86400  # 1 day
         ReceiveMessageWaitTimeSeconds: 20  # Long polling
@@ -177,7 +216,7 @@ resources:
     JobDeadLetterQueue:
       Type: AWS::SQS::Queue
       Properties:
-        QueueName: ${self:service}-dlq
+        QueueName: ${self:service}-dlq-${self:provider.stage}
         MessageRetentionPeriod: 1209600  # 14 days
         VisibilityTimeout: 360
     
@@ -195,7 +234,7 @@ resources:
     WebSocketApi:
       Type: AWS::ApiGatewayV2::Api
       Properties:
-        Name: ${self:service}-websocket
+        Name: ${self:service}-websocket-${self:provider.stage}
         ProtocolType: WEBSOCKET
         RouteSelectionExpression: "$request.body.action"
     
@@ -203,7 +242,7 @@ resources:
     ConnectionsTable:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: ${self:service}-connections
+        TableName: ${self:service}-connections-${self:provider.stage}
         BillingMode: PAY_PER_REQUEST
         AttributeDefinitions:
           - AttributeName: connectionId
@@ -306,3 +345,28 @@ resources:
           Ref: WebsocketDefaultLambdaFunction
         Principal: apigateway.amazonaws.com
         Action: lambda:InvokeFunction
+    
+    # CORS Gateway Responses - Ensure CORS headers on error responses
+    GatewayResponse4XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        ResponseType: DEFAULT_4XX
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,x-api-key,X-Amz-Security-Token,X-Amz-User-Agent,X-Amzn-Trace-Id'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+          gatewayresponse.header.Access-Control-Max-Age: "'86400'"
+    
+    GatewayResponse5XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        ResponseType: DEFAULT_5XX
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,x-api-key,X-Amz-Security-Token,X-Amz-User-Agent,X-Amzn-Trace-Id'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+          gatewayresponse.header.Access-Control-Max-Age: "'86400'"

@@ -1,0 +1,775 @@
+# Bulletproof Serverless Configuration for Atlas Codex
+# Updated with unified architecture, consistent naming, and comprehensive monitoring
+
+service: atlas-codex
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-west-2
+  stage: ${opt:stage, 'dev'}
+  
+  # Bulletproof environment configuration with validation
+  environment:
+    # Core Environment
+    NODE_ENV: ${self:custom.stage.${self:provider.stage}.NODE_ENV}
+    STAGE: ${self:provider.stage}
+    AWS_REGION: ${self:provider.region}
+    
+    # API Configuration
+    MASTER_API_KEY: ${env:MASTER_API_KEY}
+    CORS_ORIGIN: ${env:CORS_ORIGIN, '*'}
+    
+    # AI/Model Configuration with stage-specific defaults
+    OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+    GPT5_ENABLED: ${env:GPT5_ENABLED, '${self:custom.stage.${self:provider.stage}.GPT5_ENABLED}'}
+    GPT5_MODEL_SELECTION: ${env:GPT5_MODEL_SELECTION, 'auto'}
+    GPT5_FALLBACK_ENABLED: ${env:GPT5_FALLBACK_ENABLED, 'true'}
+    GPT5_REASONING_ENABLED: ${env:GPT5_REASONING_ENABLED, 'true'}
+    FORCE_GPT4: ${env:FORCE_GPT4, '${self:custom.stage.${self:provider.stage}.FORCE_GPT4}'}
+    UNIFIED_EXTRACTOR_ENABLED: ${env:UNIFIED_EXTRACTOR_ENABLED, 'true'}
+    DEFAULT_MODEL_STRATEGY: ${env:DEFAULT_MODEL_STRATEGY, '${self:custom.stage.${self:provider.stage}.DEFAULT_MODEL_STRATEGY}'}
+    
+    # AWS Resources with consistent naming
+    QUEUE_URL: 
+      Ref: JobQueue
+    WEBSOCKET_API_ENDPOINT:
+      Fn::Sub: "wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${self:provider.stage}"
+    ARTIFACTS_BUCKET:
+      Ref: ArtifactsBucket
+    CONNECTIONS_TABLE:
+      Ref: ConnectionsTable
+    
+    # Performance Configuration
+    LAMBDA_TIMEOUT: ${self:custom.timeouts.api}
+    LAMBDA_MEMORY_SIZE: ${self:custom.memory.api}
+    WORKER_TIMEOUT: ${self:custom.timeouts.worker}
+    
+    # Cost Management
+    MONTHLY_BUDGET: ${env:MONTHLY_BUDGET, '1000.0'}
+    COST_ALERTS_ENABLED: ${env:COST_ALERTS_ENABLED, 'true'}
+    
+    # Feature Flags
+    FEATURE_ASYNC_PROCESSING: ${env:FEATURE_ASYNC_PROCESSING, 'true'}
+    FEATURE_BATCH_PROCESSING: ${env:FEATURE_BATCH_PROCESSING, 'false'}
+    FEATURE_WEBHOOK_SUPPORT: ${env:FEATURE_WEBHOOK_SUPPORT, 'false'}
+    FEATURE_ADVANCED_LOGGING: ${env:FEATURE_ADVANCED_LOGGING, 'true'}
+    
+    # Bulletproof Architecture Flags
+    BULLETPROOF_ARCHITECTURE: 'true'
+    SCHEMA_VALIDATION_ENABLED: 'true'
+    CORRELATION_TRACKING_ENABLED: 'true'
+    HEALTH_MONITORING_ENABLED: 'true'
+
+  # Bulletproof IAM permissions
+  iam:
+    role:
+      statements:
+        # DynamoDB permissions with consistent table names
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:BatchGetItem
+            - dynamodb:BatchWriteItem
+          Resource: 
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/atlas-codex-jobs-${self:provider.stage}"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/atlas-codex-jobs-${self:provider.stage}/index/*"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/atlas-codex-connections-${self:provider.stage}"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/atlas-codex-connections-${self:provider.stage}/index/*"
+        
+        # S3 permissions with bulletproof scope
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+            - s3:ListBucket
+          Resource: 
+            - "arn:aws:s3:::atlas-codex-artifacts-*"
+            - "arn:aws:s3:::atlas-codex-artifacts-*/*"
+        
+        # SQS permissions for job queue
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+            - sqs:ChangeMessageVisibility
+          Resource: 
+            - "arn:aws:sqs:${self:provider.region}:*:atlas-codex-queue-${self:provider.stage}"
+            - "arn:aws:sqs:${self:provider.region}:*:atlas-codex-dlq-${self:provider.stage}"
+        
+        # WebSocket API permissions
+        - Effect: Allow
+          Action:
+            - execute-api:ManageConnections
+            - execute-api:Invoke
+          Resource: "*"
+        
+        # CloudWatch permissions for monitoring
+        - Effect: Allow
+          Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - cloudwatch:PutMetricData
+          Resource: "*"
+
+# Bulletproof custom configuration
+custom:
+  # Stage-specific configuration aligned with Vercel strategy
+  stage:
+    dev:
+      NODE_ENV: development
+      SERVICE_NAME: atlas-codex-dev
+      LOG_LEVEL: DEBUG
+      CACHE_TTL: 300
+      # Dev/Preview: GPT-5 enabled for testing new features
+      GPT5_ENABLED: true
+      FORCE_GPT4: false
+      DEFAULT_MODEL_STRATEGY: gpt5_preview
+    preview:
+      NODE_ENV: development
+      SERVICE_NAME: atlas-codex-preview
+      LOG_LEVEL: DEBUG
+      CACHE_TTL: 300
+      # Preview: GPT-5 enabled, matches Vercel preview
+      GPT5_ENABLED: true
+      FORCE_GPT4: false
+      DEFAULT_MODEL_STRATEGY: gpt5_preview
+    staging:
+      NODE_ENV: production
+      SERVICE_NAME: atlas-codex-staging
+      LOG_LEVEL: INFO
+      CACHE_TTL: 600
+      # Staging: Test production config with GPT-4
+      GPT5_ENABLED: false
+      FORCE_GPT4: true
+      DEFAULT_MODEL_STRATEGY: gpt4_stable
+    production:
+      NODE_ENV: production
+      SERVICE_NAME: atlas-codex-production
+      LOG_LEVEL: INFO
+      CACHE_TTL: 3600
+      # Production: GPT-4 stable for reliability
+      GPT5_ENABLED: false
+      FORCE_GPT4: true
+      DEFAULT_MODEL_STRATEGY: gpt4_stable
+  
+  # Performance configuration
+  timeouts:
+    api: 120      # 2 minutes for API requests
+    worker: 280   # 4 minutes 40 seconds for worker (leaves cleanup buffer)
+    websocket: 300 # 5 minutes for WebSocket
+  
+  memory:
+    api: 1024     # 1GB for API handler
+    worker: 3008  # ~3GB for worker (maximum for better performance)
+    websocket: 512 # 512MB for WebSocket handlers
+  
+  # Monitoring configuration
+  monitoring:
+    enabled: true
+    retentionDays: 30
+    detailedMetrics: true
+
+# Bulletproof package configuration
+package:
+  individually: true
+  patterns:
+    - '!packages/**'
+    - '!.git/**'
+    - '!.github/**'
+    - '!*.md'
+    - '!test/**'
+    - '!tests/**'
+    - '!.claude/**'
+    - '!.serverless/**'
+    - '!migration-*.json'
+    - '!scripts/**'
+    - 'api/**'
+    - 'node_modules/**'
+
+functions:
+  # Main API handler with bulletproof configuration
+  api:
+    handler: api/lambda.handler
+    name: ${self:service}-api-${self:provider.stage}
+    description: "Bulletproof Atlas Codex API handler with unified architecture"
+    
+    package:
+      patterns:
+        # Core bulletproof components
+        - 'api/lambda.js'
+        - 'api/config/**'
+        - 'api/schemas/**'
+        - 'api/services/**'
+        - 'api/engines/**'
+        - 'api/middleware/**'
+        
+        # Legacy fallback systems
+        - 'api/atlas-generator-integration.js'
+        - 'api/ai-processor.js'
+        - 'api/worker-enhanced.js'
+        - 'api/evidence-first-bridge.js'
+        
+        # GPT-5 implementations
+        - 'api/ai-processor-v2.js'
+        - 'api/evidence-first-bridge-v2.js'
+        
+        # Dependencies
+        - 'node_modules/**'
+    
+    events:
+      - http:
+          path: /{proxy+}
+          method: ANY
+          cors:
+            origin: ${self:provider.environment.CORS_ORIGIN}
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - x-api-key
+              - X-Correlation-Id
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+            allowCredentials: false
+      - http:
+          path: /
+          method: ANY
+          cors:
+            origin: ${self:provider.environment.CORS_ORIGIN}
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - x-api-key
+              - X-Correlation-Id
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - X-Amzn-Trace-Id
+            allowCredentials: false
+    
+    timeout: ${self:custom.timeouts.api}
+    memorySize: ${self:custom.memory.api}
+    
+    # Enhanced environment for API handler
+    environment:
+      FUNCTION_TYPE: api
+      BULLETPROOF_HANDLER: 'true'
+  
+  # Enhanced worker with bulletproof architecture
+  worker:
+    handler: api/worker-enhanced.handler
+    name: ${self:service}-worker-${self:provider.stage}
+    description: "Bulletproof worker with unified processing pipeline"
+    
+    package:
+      patterns:
+        - 'api/worker-enhanced.js'
+        - 'api/config/**'
+        - 'api/schemas/**'
+        - 'api/services/**'
+        - 'api/engines/**'
+        - 'api/middleware/**'
+        - 'node_modules/**'
+    
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - JobQueue
+              - Arn
+          batchSize: 1
+          maximumBatchingWindowInSeconds: 0
+          functionResponseType: ReportBatchItemFailures
+    
+    timeout: ${self:custom.timeouts.worker}
+    memorySize: ${self:custom.memory.worker}
+    
+    environment:
+      FUNCTION_TYPE: worker
+      BULLETPROOF_WORKER: 'true'
+      PROCESSING_MODE: background
+  
+  # Health monitoring function
+  healthMonitor:
+    handler: api/health-monitor.handler
+    name: ${self:service}-health-${self:provider.stage}
+    description: "Comprehensive health monitoring for bulletproof architecture"
+    
+    package:
+      patterns:
+        - 'api/health-monitor.js'
+        - 'api/services/health-monitor.js'
+        - 'api/config/**'
+        - 'api/services/**'
+        - 'api/middleware/**'
+        - 'node_modules/**'
+    
+    events:
+      - schedule:
+          rate: rate(5 minutes)
+          description: "Regular health checks"
+          input:
+            source: "serverless-schedule"
+            action: "health-check"
+      - http:
+          path: /health/detailed
+          method: GET
+          cors: true
+    
+    timeout: 60
+    memorySize: 512
+    
+    environment:
+      FUNCTION_TYPE: health-monitor
+      MONITORING_ENABLED: 'true'
+  
+  # WebSocket Connection Handler
+  websocketConnect:
+    handler: api/websocket.connect
+    name: ${self:service}-ws-connect-${self:provider.stage}
+    
+    events:
+      - websocket: $connect
+    
+    timeout: ${self:custom.timeouts.websocket}
+    memorySize: ${self:custom.memory.websocket}
+    
+    environment:
+      FUNCTION_TYPE: websocket-connect
+  
+  # WebSocket Disconnect Handler  
+  websocketDisconnect:
+    handler: api/websocket.disconnect
+    name: ${self:service}-ws-disconnect-${self:provider.stage}
+    
+    events:
+      - websocket: $disconnect
+    
+    timeout: ${self:custom.timeouts.websocket}
+    memorySize: ${self:custom.memory.websocket}
+    
+    environment:
+      FUNCTION_TYPE: websocket-disconnect
+  
+  # WebSocket Default Handler
+  websocketDefault:
+    handler: api/websocket.default
+    name: ${self:service}-ws-default-${self:provider.stage}
+    
+    events:
+      - websocket: $default
+    
+    timeout: ${self:custom.timeouts.websocket}
+    memorySize: ${self:custom.memory.websocket}
+    
+    environment:
+      FUNCTION_TYPE: websocket-default
+
+# Bulletproof AWS resources with consistent naming
+resources:
+  Resources:
+    # Jobs table with bulletproof configuration
+    JobsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: atlas-codex-jobs-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: status
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: N
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: StatusIndex
+            KeySchema:
+              - AttributeName: status
+                KeyType: HASH
+              - AttributeName: createdAt
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+        StreamSpecification:
+          StreamViewType: NEW_AND_OLD_IMAGES
+        PointInTimeRecoverySpecification:
+          PointInTimeRecoveryEnabled: true
+        Tags:
+          - Key: Service
+            Value: atlas-codex
+          - Key: Stage
+            Value: ${self:provider.stage}
+          - Key: Component
+            Value: bulletproof-jobs
+    
+    # Enhanced job queue with dead letter queue
+    JobQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: atlas-codex-queue-${self:provider.stage}
+        VisibilityTimeout: ${self:custom.timeouts.worker}
+        MessageRetentionPeriod: 1209600  # 14 days
+        ReceiveMessageWaitTimeSeconds: 20  # Long polling
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt:
+              - JobDeadLetterQueue
+              - Arn
+          maxReceiveCount: 3  # Try 3 times before DLQ
+        Tags:
+          - Key: Service
+            Value: atlas-codex
+          - Key: Stage
+            Value: ${self:provider.stage}
+          - Key: Component
+            Value: bulletproof-queue
+    
+    # Dead Letter Queue for failed jobs
+    JobDeadLetterQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: atlas-codex-dlq-${self:provider.stage}
+        MessageRetentionPeriod: 1209600  # 14 days
+        Tags:
+          - Key: Service
+            Value: atlas-codex
+          - Key: Stage
+            Value: ${self:provider.stage}
+          - Key: Component
+            Value: bulletproof-dlq
+    
+    # Artifacts bucket with lifecycle management
+    ArtifactsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: atlas-codex-artifacts-${sls:instanceId}
+        CorsConfiguration:
+          CorsRules:
+            - AllowedOrigins: ["*"]
+              AllowedHeaders: ["*"]
+              AllowedMethods: [GET, PUT, POST, DELETE]
+              MaxAge: 3600
+        LifecycleConfiguration:
+          Rules:
+            - Id: DeleteOldArtifacts
+              Status: Enabled
+              ExpirationInDays: 30
+            - Id: TransitionToIA
+              Status: Enabled
+              Transition:
+                StorageClass: STANDARD_IA
+                TransitionInDays: 7
+        NotificationConfiguration:
+          CloudWatchConfigurations:
+            - Event: s3:ObjectCreated:*
+              CloudWatchConfiguration:
+                LogGroupName: !Ref ArtifactsLogGroup
+        Tags:
+          - Key: Service
+            Value: atlas-codex
+          - Key: Stage
+            Value: ${self:provider.stage}
+          - Key: Component
+            Value: bulletproof-artifacts
+    
+    # WebSocket API with bulletproof configuration
+    WebSocketApi:
+      Type: AWS::ApiGatewayV2::Api
+      Properties:
+        Name: atlas-codex-websocket-${self:provider.stage}
+        ProtocolType: WEBSOCKET
+        RouteSelectionExpression: "$request.body.action"
+        Description: "Bulletproof WebSocket API for Atlas Codex"
+        Tags:
+          Service: atlas-codex
+          Stage: ${self:provider.stage}
+          Component: bulletproof-websocket
+    
+    # WebSocket connections table with TTL
+    ConnectionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: atlas-codex-connections-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: connectionId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: connectionId
+            KeyType: HASH
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+        Tags:
+          - Key: Service
+            Value: atlas-codex
+          - Key: Stage
+            Value: ${self:provider.stage}
+          - Key: Component
+            Value: bulletproof-connections
+    
+    # WebSocket routes with proper integration
+    ConnectRoute:
+      Type: AWS::ApiGatewayV2::Route
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        RouteKey: $connect
+        AuthorizationType: NONE
+        Target:
+          Fn::Sub: "integrations/${ConnectIntegration}"
+    
+    ConnectIntegration:
+      Type: AWS::ApiGatewayV2::Integration
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        IntegrationType: AWS_PROXY
+        IntegrationUri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebsocketConnectLambdaFunction.Arn}/invocations"
+    
+    DisconnectRoute:
+      Type: AWS::ApiGatewayV2::Route  
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        RouteKey: $disconnect
+        AuthorizationType: NONE
+        Target:
+          Fn::Sub: "integrations/${DisconnectIntegration}"
+    
+    DisconnectIntegration:
+      Type: AWS::ApiGatewayV2::Integration
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        IntegrationType: AWS_PROXY
+        IntegrationUri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebsocketDisconnectLambdaFunction.Arn}/invocations"
+    
+    DefaultRoute:
+      Type: AWS::ApiGatewayV2::Route
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        RouteKey: $default
+        AuthorizationType: NONE
+        Target:
+          Fn::Sub: "integrations/${DefaultIntegration}"
+    
+    DefaultIntegration:
+      Type: AWS::ApiGatewayV2::Integration
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        IntegrationType: AWS_PROXY
+        IntegrationUri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebsocketDefaultLambdaFunction.Arn}/invocations"
+    
+    # WebSocket stage with logging
+    WebSocketStage:
+      Type: AWS::ApiGatewayV2::Stage
+      Properties:
+        ApiId:
+          Ref: WebSocketApi
+        StageName: ${self:provider.stage}
+        AutoDeploy: true
+        DefaultRouteSettings:
+          DetailedMetricsEnabled: true
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+        AccessLogSettings:
+          DestinationArn:
+            Fn::GetAtt:
+              - WebSocketLogGroup
+              - Arn
+          Format: '{"requestId":"$context.requestId","stage":"$context.stage","routeKey":"$context.routeKey","status":"$context.status","error":"$context.error.message","responseLength":"$context.responseLength","requestTime":"$context.requestTime"}'
+    
+    # Lambda permissions for WebSocket
+    WebSocketConnectPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName:
+          Ref: WebsocketConnectLambdaFunction
+        Principal: apigateway.amazonaws.com
+        Action: lambda:InvokeFunction
+        SourceArn:
+          Fn::Sub: "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/*"
+    
+    WebSocketDisconnectPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName:
+          Ref: WebsocketDisconnectLambdaFunction
+        Principal: apigateway.amazonaws.com
+        Action: lambda:InvokeFunction
+        SourceArn:
+          Fn::Sub: "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/*"
+    
+    WebSocketDefaultPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName:
+          Ref: WebsocketDefaultLambdaFunction
+        Principal: apigateway.amazonaws.com
+        Action: lambda:InvokeFunction
+        SourceArn:
+          Fn::Sub: "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/*"
+    
+    # Enhanced CORS Gateway Responses
+    GatewayResponse4XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        ResponseType: DEFAULT_4XX
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,x-api-key,X-Correlation-Id,X-Amz-Security-Token,X-Amz-User-Agent,X-Amzn-Trace-Id'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+          gatewayresponse.header.Access-Control-Max-Age: "'86400'"
+    
+    GatewayResponse5XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        ResponseType: DEFAULT_5XX
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,x-api-key,X-Correlation-Id,X-Amz-Security-Token,X-Amz-User-Agent,X-Amzn-Trace-Id'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+          gatewayresponse.header.Access-Control-Max-Age: "'86400'"
+    
+    # CloudWatch Log Groups with retention
+    ApiLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/atlas-codex-api-${self:provider.stage}
+        RetentionInDays: ${self:custom.monitoring.retentionDays}
+    
+    WorkerLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/atlas-codex-worker-${self:provider.stage}
+        RetentionInDays: ${self:custom.monitoring.retentionDays}
+    
+    HealthLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/atlas-codex-health-${self:provider.stage}
+        RetentionInDays: ${self:custom.monitoring.retentionDays}
+    
+    WebSocketLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/apigateway/atlas-codex-websocket-${self:provider.stage}
+        RetentionInDays: ${self:custom.monitoring.retentionDays}
+    
+    ArtifactsLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/s3/atlas-codex-artifacts-${self:provider.stage}
+        RetentionInDays: ${self:custom.monitoring.retentionDays}
+    
+    # CloudWatch alarms for monitoring
+    ApiErrorAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: atlas-codex-api-errors-${self:provider.stage}
+        AlarmDescription: "High error rate in Atlas Codex API"
+        MetricName: Errors
+        Namespace: AWS/Lambda
+        Statistic: Sum
+        Period: 300
+        EvaluationPeriods: 2
+        Threshold: 10
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        Dimensions:
+          - Name: FunctionName
+            Value:
+              Ref: ApiLambdaFunction
+    
+    WorkerErrorAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: atlas-codex-worker-errors-${self:provider.stage}
+        AlarmDescription: "High error rate in Atlas Codex Worker"
+        MetricName: Errors
+        Namespace: AWS/Lambda
+        Statistic: Sum
+        Period: 300
+        EvaluationPeriods: 2
+        Threshold: 5
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        Dimensions:
+          - Name: FunctionName
+            Value:
+              Ref: WorkerLambdaFunction
+    
+    # DLQ alarm for failed jobs
+    DLQMessageAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: atlas-codex-dlq-messages-${self:provider.stage}
+        AlarmDescription: "Messages in dead letter queue"
+        MetricName: ApproximateNumberOfVisibleMessages
+        Namespace: AWS/SQS
+        Statistic: Average
+        Period: 300
+        EvaluationPeriods: 1
+        Threshold: 1
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        Dimensions:
+          - Name: QueueName
+            Value:
+              Fn::GetAtt:
+                - JobDeadLetterQueue
+                - QueueName
+
+  # CloudFormation outputs for reference
+  Outputs:
+    ApiUrl:
+      Description: "Bulletproof API Gateway URL"
+      Value:
+        Fn::Sub: "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${self:provider.stage}"
+    
+    WebSocketUrl:
+      Description: "Bulletproof WebSocket API URL"  
+      Value:
+        Fn::Sub: "wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${self:provider.stage}"
+    
+    JobsTableName:
+      Description: "DynamoDB Jobs Table Name"
+      Value:
+        Ref: JobsTable
+    
+    QueueUrl:
+      Description: "SQS Job Queue URL"
+      Value:
+        Ref: JobQueue
+    
+    ArtifactsBucketName:
+      Description: "S3 Artifacts Bucket Name"
+      Value:
+        Ref: ArtifactsBucket
+    
+    BulletproofVersion:
+      Description: "Bulletproof Architecture Version"
+      Value: "1.0.0"
