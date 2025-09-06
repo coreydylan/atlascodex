@@ -7,13 +7,9 @@ provider:
   region: us-west-2
   stage: ${opt:stage, 'dev'}
   environment:
-    NODE_ENV: ${self:custom.stage.${self:provider.stage}.NODE_ENV, 'production'}
-    MASTER_API_KEY: ${env:MASTER_API_KEY, 'test-key-123'}
-    OPENAI_API_KEY: ${env:OPENAI_API_KEY, ''}
-    UNIFIED_EXTRACTOR_ENABLED: ${env:UNIFIED_EXTRACTOR_ENABLED, 'false'}
-    QUEUE_URL: 
-      Ref: JobQueue
-
+    NODE_ENV: development
+    MASTER_API_KEY: test-key-123
+    STAGE: dev
 custom:
   stage:
     dev:

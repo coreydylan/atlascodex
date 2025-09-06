@@ -3,15 +3,15 @@
   "buildCommand": "cd packages/frontend && npm run build",
   "outputDirectory": "packages/frontend/dist",
   "env": {
-    "VITE_API_URL": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production",
-    "VITE_API_KEY": "atlas-prod-key-2024",
-    "VITE_ENVIRONMENT": "production"
+    "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
+    "VITE_API_KEY": "test-key-123",
+    "VITE_ENVIRONMENT": "development"
   },
   "build": {
     "env": {
-      "VITE_API_URL": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production",
-      "VITE_API_KEY": "atlas-prod-key-2024",
-      "VITE_ENVIRONMENT": "production"
+      "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
+      "VITE_API_KEY": "test-key-123",
+      "VITE_ENVIRONMENT": "development"
     }
   },
   "headers": [
@@ -23,7 +23,7 @@
           "value": "DENY"
         },
         {
-          "key": "X-Content-Type-Options", 
+          "key": "X-Content-Type-Options",
           "value": "nosniff"
         },
         {
