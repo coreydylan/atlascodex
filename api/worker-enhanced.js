@@ -6837,5 +6837,6 @@ module.exports = {
   PlanExecutor,
   BasicPlanner,
   SimpleEvaluator,
-  testPlanBasedSystem
+  testPlanBasedSystem,
+  handler: exports.handler  // Include the Lambda handler
 };
