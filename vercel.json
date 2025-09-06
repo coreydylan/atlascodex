@@ -16,17 +16,15 @@
   "installCommand": "cd packages/frontend && npm install",
   "devCommand": "cd packages/frontend && npm run dev",
   "env": {
-    "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
-    "VITE_API_KEY": "dev-e41d8c40f0bc54fcc590dc54b7ebe138344afe9dc41690c38bd99c838116405c",
-    "ENVIRONMENT": "preview",
-    "FORCE_GPT4": "false"
+    "VITE_API_URL": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production",
+    "VITE_API_KEY": "atlas-prod-key-2024",
+    "VITE_ENVIRONMENT": "production"
   },
   "build": {
     "env": {
-      "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
+      "VITE_API_URL": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production",
       "VITE_API_KEY": "atlas-prod-key-2024",
-      "ENVIRONMENT": "production",
-      "FORCE_GPT4": "true"
+      "VITE_ENVIRONMENT": "production"
     }
   },
   "headers": [
@@ -59,7 +57,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/:path*"
+      "destination": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production/:path*"
     }
   ]
 }
