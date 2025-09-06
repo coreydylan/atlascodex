@@ -1,17 +1,30 @@
 {
   "version": 2,
-  "buildCommand": "cd packages/frontend && npm run build",
-  "outputDirectory": "packages/frontend/dist",
+  "github": {
+    "enabled": true,
+    "autoAlias": true
+  },
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "production": true
+    }
+  },
+  "buildCommand": "echo 'Using root index.html'",
+  "outputDirectory": ".",
+  "framework": null,
+  "installCommand": "echo 'No install needed for static site'",
+  "devCommand": "python3 -m http.server 8000",
   "env": {
-    "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
-    "VITE_API_KEY": "test-key-123",
-    "VITE_ENVIRONMENT": "development"
+    "VITE_API_URL": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production",
+    "VITE_API_KEY": "atlas-prod-key-2024",
+    "VITE_ENVIRONMENT": "production"
   },
   "build": {
     "env": {
-      "VITE_API_URL": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev",
-      "VITE_API_KEY": "test-key-123",
-      "VITE_ENVIRONMENT": "development"
+      "VITE_API_URL": "https://s7vo1vic8b.execute-api.us-west-2.amazonaws.com/production",
+      "VITE_API_KEY": "atlas-prod-key-2024",
+      "VITE_ENVIRONMENT": "production"
     }
   },
   "headers": [
@@ -33,8 +46,23 @@
         {
           "key": "Referrer-Policy",
           "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self' https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';"
         }
       ]
     }
-  ]
+  ],
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/:path*"
+    }
+  ],
+  "functions": {
+    "api/*.js": {
+      "maxDuration": 60
+    }
+  }
 }

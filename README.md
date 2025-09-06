@@ -1,477 +1,714 @@
-# Atlas Codex - Intelligent Web Data Extraction System
+# Atlas Codex
 
-Atlas Codex is an advanced, AI-powered web data extraction system that learns from each interaction to continuously improve extraction strategies. It features Domain Intelligence Profiles (DIPs), multi-strategy extraction, and comprehensive evidence tracking.
+> **Navigation-Enhanced Universal Data Extraction Platform**
 
-## Quick Start
+Atlas Codex is a production-ready, AI-powered web extraction platform that intelligently navigates and extracts structured data from any website. Built with GPT-4o and smart navigation detection, it automatically handles single-page content, multi-page crawling, pagination, and complex site structures.
+
+## 📚 GPT-5 Migration Resources
+
+**Important**: We are actively migrating from GPT-4 to GPT-5 (released August 7, 2025). Before making any AI/LLM changes, please review:
+- **[GPT-5 Training Center](./gpt5-training/README.md)** - Comprehensive GPT-5 documentation and migration guides
+- **[Refactoring Report](./gpt5-training/REFACTORING_REPORT.md)** - Detailed analysis and migration roadmap
+- **[Migration Guide](./gpt5-training/migration-guide/step-by-step.md)** - Step-by-step migration instructions
+- **[Extraction Patterns](./gpt5-training/cookbook-examples/extraction-patterns.js)** - GPT-5 extraction patterns and best practices
+
+[![Production Status](https://img.shields.io/badge/status-production--ready-brightgreen)](https://atlas-codex-ambxba6hp-experial.vercel.app)
+[![API Health](https://img.shields.io/badge/api-healthy-brightgreen)](https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/health)
+[![Deployment](https://img.shields.io/badge/deployment-AWS%20%2B%20Vercel-blue)](https://github.com/coreydylan/atlascodex)
+
+## 🚀 Live Demo
+
+- **Frontend Application**: [atlas-codex-ambxba6hp-experial.vercel.app](https://atlas-codex-ambxba6hp-experial.vercel.app)
+- **API Endpoint**: `https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev`
+- **Health Check**: [API Health Status](https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/health)
+
+## ✨ Key Features
+
+### 🧠 **Smart Navigation Detection**
+- **Auto-Detection**: Automatically determines when multi-page extraction is beneficial
+- **Explicit Control**: Supports natural language requests like "crawl all pages" or "get complete catalog"
+- **Pattern Recognition**: Identifies pagination, detail pages, and site structures intelligently
+
+### 🎯 **Universal Extraction**
+- **Any Content Type**: Team directories, product catalogs, course listings, article archives
+- **Any Site Structure**: Single pages, paginated results, nested categories, detail links
+- **Clean Results**: Structured JSON output with comprehensive metadata
+
+### 🔧 **Production-Ready Architecture**
+- **AWS Lambda**: Serverless backend with automatic scaling
+- **React Frontend**: Modern UI with real-time extraction feedback
+- **GPT-4o Integration**: Latest AI model for superior extraction quality
+- **AJV Validation**: Strict schema enforcement with phantom field prevention
+
+## 🏗️ Architecture Overview
+
+```mermaid
+graph TD
+    A[User Request] --> B{AI Mode?}
+    B -->|Yes| C[AI Processor]
+    B -->|No| D[Direct Extraction]
+    
+    C --> E[Navigation Detection]
+    D --> E
+    
+    E --> F{Multi-page Needed?}
+    F -->|Yes| G[Crawl & Extract All Pages]
+    F -->|No| H[Single Page Extraction]
+    
+    G --> I[Deduplicate Results]
+    H --> I
+    I --> J[AJV Validation]
+    J --> K[Structured Response]
+```
+
+### Core Components
+
+- **`api/lambda.js`**: Main Lambda handler and request routing
+- **`api/evidence-first-bridge.js`**: Navigation-enhanced unified extractor engine
+- **`api/worker-enhanced.js`**: Plan-based fallback system
+- **`api/atlas-generator-integration.js`**: AI processing and natural language understanding
+- **`packages/frontend/`**: React application with real-time UI
+- **`packages/core/`**: Shared schema contracts and type definitions
+
+## 🚀 Quick Start
 
 ### Prerequisites
-
-- Node.js 20+ and npm
-- Docker and Docker Compose
-- Redis (or use Docker)
-- AWS account (for production deployment)
+- Node.js 20+
+- AWS CLI configured
+- Serverless Framework
 - OpenAI API key
 
-### Local Development Setup
-
+### 1. Clone & Install
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/atlascodex.git
+git clone https://github.com/coreydylan/atlascodex.git
 cd atlascodex
-
-# Install dependencies
 npm install
-npm run bootstrap
+```
 
-# Set up environment variables
-cp .env.example .env
-# Edit .env with your API keys
+### 2. Environment Setup
+```bash
+# Copy environment template
+cp lambda-env.json lambda-env.local.json
 
-# Start Redis
-docker-compose up -d redis
+# Edit with your keys
+{
+  "Variables": {
+    "NODE_ENV": "development",
+    "MASTER_API_KEY": "your-api-key-here",
+    "OPENAI_API_KEY": "your-openai-key-here",
+    "UNIFIED_EXTRACTOR_ENABLED": "true"
+  }
+}
+```
 
-# Start the system
+### 3. Deploy Backend
+```bash
+# Deploy to AWS
+npm run deploy
+
+# The API will be available at:
+# https://YOUR-API-ID.execute-api.us-west-2.amazonaws.com/dev
+```
+
+### 4. Run Frontend Locally
+```bash
+cd packages/frontend
+npm install
 npm run dev
+
+# Frontend available at http://localhost:5173
 ```
 
-### Production Deployment
+## 🔧 Usage Examples
 
+### Direct API Usage
+
+#### Basic Extraction
 ```bash
-# Build Docker images
-npm run docker:build
-
-# Deploy to Kubernetes
-kubectl apply -f kubernetes/
-
-# Or deploy to AWS
-cd terraform
-terraform init
-terraform apply
+curl -X POST "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/api/extract" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR_KEY" \
+  -d '{
+    "url": "https://example.com/team",
+    "extractionInstructions": "extract name, title, and bio from team members",
+    "UNIFIED_EXTRACTOR_ENABLED": true
+  }'
 ```
 
-## Key Features
-
-### Domain Intelligence Profiles (DIPs)
-- Automatic site learning and mapping
-- Framework and technology detection
-- Rate limit and robot.txt compliance
-- Optimal strategy selection
-
-### Multi-Strategy Extraction
-1. **Static Fetch** - Fast HTML retrieval
-2. **Browser Render** - JavaScript execution
-3. **Browser JS** - Complex interactions
-4. **Hybrid Smart** - Adaptive approach
-5. **GPT-5 Direct** - AI-powered extraction
-6. **GPT-5 Reasoning** - Advanced analysis
-
-### Evidence & Verification
-- Cryptographic content hashing
-- Blockchain-style evidence chain
-- Complete audit trail
-- Integrity verification
-
-### Cost Optimization
-- Target: <15% LLM usage
-- Smart caching system
-- Strategy cost tracking
-- Resource monitoring
-
-## API Documentation
-
-### Authentication
-All API requests require an API key:
-```
-x-api-key: your-api-key
-```
-
-### Core Endpoints
-
-#### Create Extraction Job
+#### Multi-Page Extraction
 ```bash
-POST /jobs
+curl -X POST "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/api/extract" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR_KEY" \
+  -d '{
+    "url": "https://example.com/products", 
+    "extractionInstructions": "extract all products - navigate through all pages",
+    "UNIFIED_EXTRACTOR_ENABLED": true
+  }'
+```
+
+#### AI-Powered Mode
+```bash
+curl -X POST "https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/api/ai/process" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR_KEY" \
+  -d '{
+    "prompt": "get all team members with full bios from company.com/team",
+    "UNIFIED_EXTRACTOR_ENABLED": true,
+    "autoExecute": true
+  }'
+```
+
+### Frontend Usage
+
+1. **Visit**: [atlas-codex-ambxba6hp-experial.vercel.app](https://atlas-codex-ambxba6hp-experial.vercel.app)
+2. **Toggle AI Mode**: Enable "AI-Powered Unified Extraction"  
+3. **Enter Request**: Natural language like "get all products from store.com"
+4. **Review Results**: Structured JSON with extraction metadata
+
+## 📊 Extraction Capabilities
+
+### Supported Content Types
+- ✅ **Team/Staff Directories**: Individual profiles, contact info, bios
+- ✅ **Product Catalogs**: E-commerce listings, specifications, pricing  
+- ✅ **Course Catalogs**: Academic programs, descriptions, requirements
+- ✅ **Article Archives**: News, blogs, documentation with pagination
+- ✅ **Event Listings**: Conferences, meetups, schedules
+- ✅ **Directory Listings**: Business directories, service providers
+- ✅ **Any Structured Content**: Universal pattern recognition
+
+### Navigation Patterns
+- ✅ **Pagination**: "Next", "Page 2", numbered pagination
+- ✅ **Detail Pages**: "View Profile", "Read More", "Learn More" links  
+- ✅ **Category Drilling**: Department → Subdepartment → Individual items
+- ✅ **Search Results**: Multi-page search result navigation
+- ✅ **Infinite Scroll**: Load more patterns and dynamic content
+
+## 🏭 Production Deployment & CI/CD
+
+### Branch Strategy & Deployment Pipeline
+
+#### Branch Structure
+- **`main`** → Development Environment (Auto-deploy)
+- **`production`** → Production Environment (Auto-deploy with canary rollout)
+- **Feature branches** → No auto-deployment (manual testing only)
+
+#### Automated CI/CD Pipeline
+```mermaid
+graph TD
+    A[Push to main] --> B[GitHub Actions: Test & Build]
+    B --> C[Deploy to Development]
+    C --> D[Run Smoke Tests]
+    D --> E[Update Lambda Alias]
+    
+    F[Push to production] --> G[GitHub Actions: Test & Build]
+    G --> H[Create Backup]
+    H --> I[Deploy to Production]
+    I --> J[Canary Deployment 10%]
+    J --> K[Monitor Metrics]
+    K --> L{Healthy?}
+    L -->|Yes| M[Promote to 100%]
+    L -->|No| N[Rollback]
+```
+
+### Current Production Environment
+
+#### Backend (AWS Lambda)
+- **Service**: `atlas-codex-dev` (Development), `atlas-codex-prod` (Production)
+- **Region**: `us-west-2`
+- **Development API**: `https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev`
+- **Production API**: `https://atlas-codex-api.com` (aliased)
+- **Lambda Functions**:
+  - `atlas-codex-{stage}-api`: Main request handler
+  - `atlas-codex-{stage}-worker`: Background processing
+  - WebSocket handlers for real-time updates
+
+#### Frontend (Vercel)
+- **Domain**: `atlas-codex-ambxba6hp-experial.vercel.app`
+- **Framework**: React + Vite + TypeScript
+- **Deployment**: Automatic from `main` branch
+- **Environment**: Production-optimized builds
+
+### Deployment Commands
+
+#### Automated Deployment (Recommended)
+```bash
+# Deploy to development (triggers on main branch push)
+git push origin main
+
+# Deploy to production (triggers on production branch push)
+git checkout production
+git merge main
+git push origin production
+```
+
+#### Manual Deployment
+```bash
+# Deploy to development
+npm run deploy:dev
+
+# Deploy to staging
+npm run deploy:staging
+
+# Deploy to production
+npm run deploy:prod
+
+# Deploy single function
+serverless deploy --function api --stage dev
+```
+
+#### Emergency Rollback
+```bash
+# Trigger emergency rollback via GitHub Actions
+gh workflow run deploy.yml
+
+# Manual rollback to specific version
+aws lambda update-alias \
+  --function-name atlas-codex-prod-api \
+  --name prod \
+  --function-version 45
+```
+
+#### Frontend Deployment  
+```bash
+cd packages/frontend
+
+# Deploy to Vercel (automatic on git push)
+vercel deploy
+
+# Production deployment
+vercel --prod
+```
+
+### Environment Configuration
+
+#### Required GitHub Secrets
+```yaml
+# AWS Credentials
+AWS_ACCESS_KEY_ID: your-aws-access-key
+AWS_SECRET_ACCESS_KEY: your-aws-secret-key
+
+# API Keys
+OPENAI_API_KEY: your-openai-key
+DEV_MASTER_API_KEY: dev-api-key
+PROD_MASTER_API_KEY: prod-api-key
+```
+
+#### AWS Lambda Environment Variables
+```yaml
+environment:
+  NODE_ENV: ${self:custom.stage.${self:provider.stage}.NODE_ENV}
+  MASTER_API_KEY: ${env:MASTER_API_KEY}
+  OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+  UNIFIED_EXTRACTOR_ENABLED: ${env:UNIFIED_EXTRACTOR_ENABLED, 'true'}
+  QUEUE_URL: !Ref JobQueue
+```
+
+#### Frontend Environment Variables
+```bash
+# .env.local (Development)
+VITE_API_URL=https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev
+VITE_API_KEY=dev-api-key
+
+# .env.production (Production)
+VITE_API_URL=https://atlas-codex-api.com
+VITE_API_KEY=prod-api-key
+```
+
+### Deployment Verification
+
+#### Health Checks
+```bash
+# Development health check
+curl https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/health
+
+# Production health check
+curl https://atlas-codex-api.com/health
+
+# Test extraction endpoint
+curl -X POST https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/api/extract \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: test-key-123" \
+  -d '{"url":"https://example.com","extractionInstructions":"Extract title","UNIFIED_EXTRACTOR_ENABLED":true}'
+```
+
+#### CloudWatch Monitoring
+```bash
+# View logs for development
+aws logs tail /aws/lambda/atlas-codex-dev-api --follow
+
+# View logs for production
+aws logs tail /aws/lambda/atlas-codex-prod-api --follow
+
+# Check error metrics
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/Lambda \
+  --metric-name Errors \
+  --dimensions Name=FunctionName,Value=atlas-codex-prod-api \
+  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+  --period 300 \
+  --statistics Sum
+```
+
+## 🔍 API Reference
+
+### Endpoints
+
+#### `GET /health`
+Health check endpoint
+```json
 {
-  "url": "https://example.com",
-  "options": {
-    "strategy": "auto",
-    "force": false
+  "status": "healthy",
+  "message": "Atlas Codex API is running!",
+  "version": "2.0.0",
+  "features": {
+    "dynamodb": true,
+    "sqs": true,
+    "s3": true
   }
 }
 ```
 
-#### Batch Extraction
-```bash
-POST /jobs/batch
-{
-  "urls": ["url1", "url2", "url3"],
-  "options": {
-    "strategy": "static_fetch"
-  }
-}
-```
-
-#### Get Job Status
-```bash
-GET /jobs/{jobId}
-```
-
-#### Get Job Result
-```bash
-GET /jobs/{jobId}/result
-```
-
-#### Direct Extraction
-```bash
-POST /extract
+#### `POST /api/extract`
+Direct extraction endpoint
+```json
 {
   "url": "https://example.com",
-  "strategy": "browser_render"
+  "extractionInstructions": "extract name and title from team members",
+  "UNIFIED_EXTRACTOR_ENABLED": true,
+  "maxPages": 10,
+  "maxDepth": 2
 }
 ```
 
-#### Get Metrics
-```bash
-GET /metrics
+#### `POST /api/ai/process`  
+AI-powered natural language processing
+```json
+{
+  "prompt": "get all products from store.com with prices",
+  "UNIFIED_EXTRACTOR_ENABLED": true,
+  "autoExecute": true
+}
 ```
 
-#### Get Cost Analysis
-```bash
-GET /costs?domain=example.com&period=24h
-```
-
-## User Guide
-
-### 1. Basic Extraction
-
-The simplest way to extract data:
-
-```javascript
-// Using the API
-const response = await fetch('http://api.atlascodex.com/extract', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'x-api-key': 'your-api-key'
-  },
-  body: JSON.stringify({
-    url: 'https://example.com/product'
-  })
-});
-
-const data = await response.json();
-```
-
-### 2. Strategy Selection
-
-Choose the right strategy for your needs:
-
-- **auto** - Let Atlas Codex decide (recommended)
-- **static_fetch** - For simple HTML pages ($0.01)
-- **browser_render** - For JS-heavy sites ($0.05)
-- **browser_js** - For complex interactions ($0.08)
-- **hybrid_smart** - Best of both worlds ($0.06)
-- **gpt5_direct** - AI extraction ($0.15)
-- **gpt5_reasoning** - Advanced analysis ($0.25)
-
-### 3. Batch Processing
-
-Process multiple URLs efficiently:
-
-```javascript
-const response = await fetch('http://api.atlascodex.com/jobs/batch', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'x-api-key': 'your-api-key'
-  },
-  body: JSON.stringify({
-    urls: [
-      'https://site1.com/page1',
-      'https://site2.com/page2',
-      'https://site3.com/page3'
+### Response Format
+```json
+{
+  "jobId": "extract_1234567890_abc123",
+  "status": "completed",
+  "message": "Extraction completed", 
+  "result": {
+    "success": true,
+    "data": [
+      {
+        "name": "John Doe",
+        "title": "Software Engineer",
+        "bio": "Experienced developer..."
+      }
     ],
-    options: {
-      strategy: 'auto'
-    }
-  })
-});
-```
-
-### 4. Monitoring Jobs
-
-Track extraction progress:
-
-```javascript
-// Create job
-const jobResponse = await createJob(url);
-const { job } = await jobResponse.json();
-
-// Poll for status
-const checkStatus = async () => {
-  const response = await fetch(`/jobs/${job.id}`, {
-    headers: { 'x-api-key': apiKey }
-  });
-  const status = await response.json();
-  
-  if (status.status === 'completed') {
-    // Get result
-    const result = await fetch(`/jobs/${job.id}/result`, {
-      headers: { 'x-api-key': apiKey }
-    });
-    return result.json();
-  }
-  
-  // Continue polling
-  setTimeout(checkStatus, 2000);
-};
-```
-
-### 5. Using the Frontend
-
-Access the web interface at `http://app.atlascodex.com`
-
-**Dashboard Tab**
-- System health monitoring
-- Active job tracking
-- Performance metrics
-- Cost analysis
-
-**Extract Tab**
-- Single URL extraction
-- Batch mode for multiple URLs
-- Strategy selection
-- Real-time progress
-
-**DIPs Tab**
-- View learned domain profiles
-- Manually update strategies
-- Export/import profiles
-
-**Jobs Tab**
-- Job history
-- Result viewing
-- Re-run failed jobs
-- Export results
-
-**Analytics Tab**
-- Usage statistics
-- Cost breakdown
-- Performance trends
-- Strategy effectiveness
-
-## Advanced Usage
-
-### Custom Headers
-
-Add custom headers for authentication:
-
-```javascript
-{
-  "url": "https://api.example.com/data",
-  "options": {
-    "headers": {
-      "Authorization": "Bearer token",
-      "X-Custom-Header": "value"
+    "metadata": {
+      "processingMethod": "unified_extractor_navigation_aware",
+      "unifiedExtractor": true,
+      "multiPage": true,
+      "processingTime": 4641,
+      "crawlResults": {
+        "totalPagesFound": 3,
+        "pagesProcessed": 3,
+        "pagesSuccessful": 3,
+        "totalItems": 12
+      }
     }
   }
 }
 ```
 
-### Proxy Configuration
-
-Route through proxies:
-
-```javascript
-{
-  "url": "https://example.com",
-  "options": {
-    "proxy": "http://proxy.server:8080"
-  }
-}
-```
-
-### Content Selectors
-
-Extract specific elements:
-
-```javascript
-{
-  "url": "https://example.com",
-  "options": {
-    "selectors": {
-      "title": "h1.product-title",
-      "price": ".price-tag",
-      "description": "#product-description"
-    }
-  }
-}
-```
-
-### Evidence Verification
-
-Verify extraction integrity:
-
-```javascript
-const result = await getJobResult(jobId);
-
-// Verify evidence chain
-const isValid = await verifyEvidence(result.evidence);
-
-// Check content hash
-const hash = createHash('sha256')
-  .update(result.content)
-  .digest('hex');
-  
-assert(hash === result.evidence.contentHash);
-```
-
-## Troubleshooting
-
-### Common Issues
-
-**Job Stuck in Processing**
-- Check worker logs: `docker logs atlas-worker`
-- Verify Redis connection
-- Check resource limits
-
-**High Costs**
-- Review strategy usage in Analytics
-- Enable DIP caching
-- Use batch processing
-
-**Extraction Failures**
-- Check robots.txt compliance
-- Verify rate limits
-- Review error logs
-
-**GPT-5 Hanging at 15%**
-- Ensure correct parameters (verbosity, reasoning_effort)
-- Check API key validity
-- Monitor token usage
-
-### Debug Mode
-
-Enable detailed logging:
-
-```bash
-DEBUG=atlas:* npm start
-```
-
-### Health Checks
-
-Monitor system health:
-
-```bash
-curl http://api.atlascodex.com/health
-```
-
-## Architecture
-
-### System Components
-
-1. **API Server** - RESTful API gateway
-2. **Worker Pool** - Extraction processors
-3. **Redis Queue** - Job management
-4. **DIP Store** - Domain intelligence
-5. **Evidence Ledger** - Audit trail
-6. **Cost Optimizer** - Resource management
-
-### Data Flow
-
-1. Client submits extraction request
-2. API creates job in queue
-3. Worker picks up job
-4. DIP system checks domain profile
-5. Strategy executor runs extraction
-6. Evidence system logs results
-7. Client retrieves results
-
-## Development
+## 🛠️ Development
 
 ### Project Structure
-
 ```
-atlascodex/
+atlas-codex/
+├── .github/workflows/           # CI/CD GitHub Actions
+│   ├── ci.yml                  # Legacy CI configuration
+│   └── deploy.yml              # Main deployment pipeline
+├── api/                        # Backend Lambda functions
+│   ├── lambda.js               # Main request handler
+│   ├── evidence-first-bridge.js # Unified extractor engine  
+│   ├── worker-enhanced.js      # Background processing
+│   ├── websocket.js            # WebSocket connection handlers
+│   └── templates/              # Worker templates
 ├── packages/
-│   ├── api/          # API server
-│   ├── worker/       # Extraction workers
-│   ├── frontend/     # Web interface
-│   ├── dip-engine/   # DIP system
-│   ├── strategies/   # Extraction strategies
-│   ├── evidence/     # Evidence ledger
-│   └── shared/       # Common utilities
-├── kubernetes/       # K8s manifests
-├── terraform/        # AWS infrastructure
-└── docker/          # Docker configs
+│   ├── frontend/               # React application
+│   │   ├── src/
+│   │   │   ├── App.tsx         # Main application component
+│   │   │   └── components/     # Reusable UI components
+│   │   ├── package.json
+│   │   └── vercel.json         # Frontend deployment config
+│   ├── core/                   # Shared library
+│   │   ├── src/
+│   │   │   ├── index.ts        # Main exports
+│   │   │   └── schema-contracts.ts # Schema definitions
+│   │   └── package.json
+│   └── worker/                 # Worker package
+├── scripts/                    # Deployment and test scripts
+├── serverless.yml              # AWS deployment configuration
+├── deploy-production.sh        # Production deployment script
+├── package.json               # Root dependencies and scripts
+└── lambda-env.json            # Environment template
 ```
 
-### Running Tests
+### Git Worktree Development Workflow
 
+#### 1. Setup New Feature Development
 ```bash
-# Unit tests
-npm test
+# Create and switch to a new feature branch using git worktree
+git worktree add ../atlas-feature-name feature/feature-name
+cd ../atlas-feature-name
 
-# Integration tests
-npm run test:integration
-
-# API tests
-node test-api.js
-
-# E2E tests
-npm run test:e2e
+# Install dependencies in the new worktree
+npm install
+npm run bootstrap
 ```
 
-### Contributing
+#### 2. Local Development
+```bash
+# Start frontend development server
+cd packages/frontend
+npm run dev
+# Frontend available at http://localhost:5173
 
-1. Fork the repository
-2. Create feature branch
-3. Make changes
-4. Run tests
-5. Submit pull request
+# Test API endpoints against development environment
+curl https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/health
+```
 
-## Security
+#### 3. Testing
+```bash
+# Run all tests
+npm run test
+npm run lint
+npm run typecheck
 
-### Best Practices
+# Test extraction functionality
+npm run test:unified-extractor
+npm run test:accuracy:critical
 
-- Rotate API keys regularly
-- Use environment variables
-- Enable rate limiting
-- Monitor suspicious activity
-- Keep dependencies updated
+# Validate production readiness
+npm run validate:production-ready
 
-### Compliance
+# Run frontend tests
+cd packages/frontend
+npm test
+```
 
-- Respects robots.txt
-- Follows rate limits
-- GDPR compliant
-- SOC2 ready
+#### 4. Deployment Testing
+```bash
+# Deploy to development for testing (optional)
+npm run deploy:dev
 
-## Support
+# Verify deployment health
+curl https://gxi4vg8gla.execute-api.us-west-2.amazonaws.com/dev/health
+```
 
-### Resources
+#### 5. Creating Pull Requests
+```bash
+# Commit changes
+git add .
+git commit -m "feat: add new extraction feature"
 
-- [API Reference](https://docs.atlascodex.com/api)
-- [Video Tutorials](https://youtube.com/atlascodex)
-- [Community Forum](https://forum.atlascodex.com)
-- [GitHub Issues](https://github.com/atlascodex/issues)
+# Push feature branch
+git push origin feature/feature-name
 
-### Contact
+# Create pull request via GitHub CLI
+gh pr create --title "Add new extraction feature" --body "Description of changes"
+```
 
-- Email: support@atlascodex.com
-- Discord: https://discord.gg/atlascodex
-- Twitter: @atlascodex
+### Branch Management
 
-## License
+#### Branch Naming Conventions
+- `feature/` - New features
+- `fix/` - Bug fixes
+- `docs/` - Documentation updates
+- `refactor/` - Code refactoring
+- `test/` - Test additions/updates
 
-MIT License - see LICENSE file for details
+#### Example Branch Names
+```bash
+feature/multi-page-extraction
+fix/websocket-connection-error
+docs/api-documentation-update
+refactor/extraction-engine-optimization
+test/accuracy-regression-tests
+```
 
-## Acknowledgments
+### Adding New Features
 
-- OpenAI for GPT-5 integration
-- Playwright for browser automation
-- Redis for queue management
-- The open source community
+#### 1. Extraction Enhancements
+```bash
+# Main extraction logic
+vim api/evidence-first-bridge.js
+
+# Update navigation detection
+# Function: shouldUseMultiPageExtraction()
+# Function: performNavigationAwareExtraction()
+
+# Add new patterns to extraction templates
+vim api/templates/extract.js
+```
+
+#### 2. Frontend Features  
+```bash
+# Add new components
+vim packages/frontend/src/components/NewComponent.tsx
+
+# Update main application
+vim packages/frontend/src/App.tsx
+
+# Follow existing TypeScript and React patterns
+npm run typecheck  # Verify types
+npm run lint       # Check code style
+```
+
+#### 3. API Endpoints
+```bash
+# Add new routes
+vim api/lambda.js
+
+# Follow existing error handling patterns
+# Update API documentation in README
+# Test new endpoints with curl
+```
+
+#### 4. WebSocket Features
+```bash
+# Update WebSocket handlers
+vim api/websocket.js
+
+# Test real-time functionality
+vim packages/frontend/src/hooks/useWebSocket.ts
+```
+
+### Development Best Practices
+
+#### Code Quality
+- Use TypeScript for type safety
+- Follow ESLint rules (`npm run lint`)
+- Write comprehensive tests
+- Document API changes in README
+
+#### Git Workflow
+- Use git worktrees for feature isolation
+- Create descriptive commit messages
+- Keep pull requests focused and small
+- Test thoroughly before merging
+
+#### Deployment Safety
+- Always test in development first
+- Use canary deployments for production
+- Monitor CloudWatch logs and metrics
+- Keep rollback procedures ready
+
+## 📚 Documentation
+
+### Developer Documentation
+- **[CLAUDE.md](./CLAUDE.md)** - Comprehensive guide for Claude Code development workflow
+- **[DEVELOPMENT_WORKFLOW.md](./DEVELOPMENT_WORKFLOW.md)** - Step-by-step feature development process
+- **[README.md](./README.md)** - This file - project overview and quick start
+
+### Development Workflow
+1. **Feature Development**: Use git worktrees for isolated development
+2. **Testing**: Comprehensive test suite with accuracy validation
+3. **Pull Requests**: Structured PR process with automated CI/CD
+4. **Deployment**: Automated deployment pipeline with canary rollouts
+5. **Monitoring**: CloudWatch integration with automatic rollback
+
+### Quick Start for Developers
+```bash
+# Setup new feature development
+git worktree add ../atlas-feature-name feature/feature-name
+cd ../atlas-feature-name
+npm install && npm run bootstrap
+
+# Development workflow
+npm run test && npm run lint && npm run typecheck
+npm run test:accuracy:critical
+
+# Create pull request
+git push origin feature/feature-name
+gh pr create --title "feat: description" --body "Details"
+```
+
+## 🤝 Contributing
+
+We welcome contributions! Please follow our comprehensive development workflow:
+
+### Getting Started
+1. **Read the documentation**: Start with [CLAUDE.md](./CLAUDE.md) and [DEVELOPMENT_WORKFLOW.md](./DEVELOPMENT_WORKFLOW.md)
+2. **Setup development environment**: Use git worktrees for feature isolation
+3. **Follow branch naming**: `feature/`, `fix/`, `docs/`, `refactor/`, `test/`
+4. **Test thoroughly**: All production endpoints must remain functional
+5. **Create structured PRs**: Use our PR template and checklist
+
+### Development Standards
+- **Git Worktrees**: Use isolated environments for each feature
+- **TypeScript**: Strict typing for all frontend components
+- **Testing**: Unit, integration, and accuracy tests required
+- **ESLint**: Follow existing linting rules and patterns
+- **Error Handling**: Comprehensive error handling with user-friendly messages
+- **Documentation**: Update docs for API changes and new features
+
+### Pull Request Process
+1. **Pre-PR Checklist**: All tests pass, code quality checks complete
+2. **Comprehensive Description**: Use PR template with testing details
+3. **Code Review**: Team review for quality, security, and functionality
+4. **Automated Testing**: GitHub Actions validate all changes
+5. **Merge Strategy**: Squash commits, automated deployment pipeline
+
+### Deployment Pipeline
+- **main branch** → Development environment (auto-deploy)
+- **production branch** → Production environment (canary rollout)
+- **Feature branches** → Local development only
+
+### Emergency Procedures
+```bash
+# Emergency rollback
+gh workflow run deploy.yml
+
+# Manual rollback
+aws lambda update-alias --function-name atlas-codex-prod-api --name prod --function-version 45
+```
+
+## 📝 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🆘 Support & Issues
+
+- **Issues**: [GitHub Issues](https://github.com/coreydylan/atlascodex/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/coreydylan/atlascodex/discussions)  
+- **Documentation**: [Wiki](https://github.com/coreydylan/atlascodex/wiki)
+
+## 🚀 Roadmap
+
+### Short Term
+- [ ] Enhanced error handling and retry logic
+- [ ] Batch processing for multiple URLs
+- [ ] Performance optimizations and caching
+- [ ] Extended schema validation options
+
+### Medium Term  
+- [ ] Custom extraction rules and templates
+- [ ] Webhook notifications for completed extractions
+- [ ] Rate limiting and usage analytics
+- [ ] Advanced crawling strategies
+
+### Long Term
+- [ ] Multi-region deployment
+- [ ] Enterprise authentication and authorization
+- [ ] GraphQL API interface
+- [ ] Machine learning model fine-tuning
 
 ---
 
-Built with ❤️ by the Atlas Codex Team
+**Atlas Codex** - Built with ❤️ for universal web extraction
+
+*Last updated: September 4, 2025*
